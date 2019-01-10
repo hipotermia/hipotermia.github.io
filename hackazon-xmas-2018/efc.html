@@ -1,0 +1,181 @@
+<h3>[150] HELP US SAVE CHRISTMAS!</h3>
+
+<p class="challenge-description">The easter bunny group known as bs0ciety hacked into one of North Pole's datacenters
+    and encrypted all the files they could get access to. One of the files they encrypted was the list of naughty and
+    good children for the year! We can't have Christmas this way :(. Luckily, one of our elves managed to find the
+    encrypted list and a piece of software that the bunnies left behind. Can you help us recover the list and save
+    Christmas?</p>
+
+<p>In this challenge an encoded file <code>5c1172484633f632253808.ef</code> and the script which was used to encode it
+    <code>efc.py</code> are provided.</p>
+
+<pre class="prettyprint">
+%EF-1.3.37}Äe7G<=°ÉŒšäõ)»g-#ØQ{šo˜K“T3AO31fmJlNufNPi7jaUXnr9YQcqMEypvVFPqkFENnA1LpDci8zejVfcH/2HzAmx
+425AaUEfPvCD8NWp5kDBuNsJRbkCa47rE0IrEiWfVpqHz5xF9pcPE18q0LiCf367
+koYU56VVMeVQ9fZKp1wkmjuWg3sOR9IK5vAbVRuBBGpUjlmBHNFIIEoxKuugzpAM
+/nfh3WQtOiLvjuBObJfrSbrPdOsOmYdfAaiwpL2UVCpul4VExRdkg1epQQ6KREzo
+V37LfTAeHubelKAGKukScU3JNdTNDzrEuJKoAN6QoF7E3I+gOHFEsuSMVSfq5hMF
+SGfAMVAMfX2Rii2hvCp47v5xK2jNdPAtb1h/+ZXoDo5Kfol5ID03cIHPRmCFVhJb
+...
+</pre>
+
+<pre class="prettyprint">
+#!/usr/bin/env python3
+
+#  ______ ______ _____
+# |  ____|  ____/ ____|
+# | |__  | |__ | |
+# |  __| |  __|| |
+# | |____| |   | |____
+# |______|_| __ \_____|  ____ ______
+#           /_ | |___ \ |___ \____  |
+#      __   _| |   __) |  __) |  / /
+#      \ \ / / |  |__ <  |__ <  / /
+#       \ V /| |_ ___) | ___) |/ /
+#        \_/ |_(_)____(_)____//_/
+#
+# "Give a man a gun and he'll rob a bank.
+#   Give a man a bank and he'll rob the world."
+#                                  - Mr. R4bb1t
+#
+
+import sys
+import os
+import base64
+import hashlib
+
+ROUNDS = 1024
+BITLENGTH = 2056
+
+
+def combine(b1, b2):
+    return bytes(a ^ b for a, b in zip(b1, b2))
+
+
+def secure_keygen(bitlength):
+    bl = bitlength // 8
+    k1 = os.urandom(bl)
+    k2 = os.urandom(bl)
+    for i in range(ROUNDS):
+        k1, k2 = os.urandom(bl), combine(k1, k2)
+    return k2
+
+
+def key_stretch(key, length):
+    if len(key) >= length:
+        raise ValueError(
+            'Key length is {} which is already longer than the wanted stretch length: {}'
+            .format(len(key), length)
+        )
+    klm = length // len(key)
+    klr = length - (klm * len(key))
+    print("Length string: %d, length key: %d, klm: %d, klr: %d" % (length, len(key), length // len(key), length - (klm * len(key))))
+
+    if klr == 0:
+        raise ValueError('Key cannot be stretched to length {}'.format(length))
+    klm += 1
+    return (key * klm)[:length]
+
+
+def encrypt(data, key):
+    open("intermediate_packed", "wb").write(data)
+    if len(key) < 256:
+        raise ValueError('Key must be at least 2048 bits in length')
+    return combine(data, key_stretch(key, len(data)))
+
+
+def pack(data):
+    enc = str(base64.b64encode(data), 'utf-8')
+    return '\n'.join([enc[i:i+64] for i in range(0, len(enc), 64)])
+
+
+def ec_file(filepath, outpath, key):
+    with open(filepath, 'rb') as ifile:
+        encrypted_data = encrypt(bytes(pack(ifile.read()), 'utf-8'), key)
+    header = b'%EF-1.3.37' + hashlib.sha256(key).digest()
+    with open(outpath, 'wb') as ofile:
+        ofile.write(header)
+        ofile.write(bytes(pack(encrypted_data), 'utf-8'))
+
+
+def main():
+    if len(sys.argv) < 2:
+        print('It\'s python efc.py &lt;file path>')
+        sys.exit(1)
+
+    ipath = sys.argv[1]
+    opath = ipath + '.ef'
+    if not (os.path.exists(ipath) and os.path.isfile(ipath)):
+        print('Nothing to do here.')
+        sys.exit(1)
+
+    key = secure_keygen(BITLENGTH)
+    ec_file(ipath, opath, key)
+
+    print('Saved the container file to {}'.format(opath))
+    print('Key: {}'.format(str(base64.b64encode(key), 'utf-8')))
+
+
+if __name__ == '__main__':
+    main()
+</pre>
+
+<p>Looking at what the code is doing it's possible to see that the firsts bytes of the encoded file are the SHA256 hash
+    of the key used to encrypt the file. The rest, is the content of the xored file with that key and then encoded in
+    base64.</p>
+
+<p>First of all, we have to remove the SHA256 hash from the encrypted file and remove newlines to be able to decode the base64.</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/efc# cut -c-100 b64 
+T3AO31fmJlNufNPi7jaUXnr9YQcqMEypvVFPqkFENnA1LpDci8zejVfcH/2HzAmx425AaUEfPvCD8NWp5kDBuNsJRbkCa47rE0Ir
+</pre>
+
+<p>Decode the base64 code to obtain the xored binary.</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/efc# base64 -d b64 > bin
+</pre>
+
+<p>The main vulnerability of using XOR to encrypt files is that it's possible to obtain the key used on the XOR operation because there are always characters which are repeated more often.<br>
+    The lenght of the key is already known based on the provided code <code>2056/8 = 257</code>.<br>
+    Use <code>xortool</code> to bruteforce all the possible combinations:</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/efc# xortool -l 257 -b bin
+</pre>
+
+<p>Looking at the output of xortool, only one of the combination files looks like something interesting.</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/efc/xortool_out# file *.out
+...
+065.out: ASCII text
+...
+</pre>
+
+<p>The file seems a base64 text.</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/efc/xortool_out# head 065.out 
+R0lGODlhaAG/APcAAAMEAQwNCggJBg8QDREYFRweGxUYFRARDjwNED4QExshHiAh
+HiY1HSg3Hx4kIiYpJy01Ki41Mjs9OjU4NjE/KEQXGk4RI0kdIEklIU8tKVw4N1Qu
+LnEmLmExPDdBNV1JLEJPOmpXPRcgQBskQykxTz0nYj8pY2c7REk0bFI/c0YxaT1D
+ShVOaUNFQ0ROSUpNS0ZJR1BWTVJVU1lcWk1TTmlGR3xLQXdZWHJHUU5qTlxgXllk
+UlRgTWBmXGhyUE5UbVVKf1pHeU1UbX9TYEJwe1xic2RmZGxta2VraHF1bnNud3Rv
+eG5zcXR1c3t8e3Z5d3RvZ403QIhubY1paGmKe3uCeoaGfoaieoikfSVkn1dMgV1T
+hWtdi2VYiGpgj3NjjnZrlXtznHFyjoJ2nIJ9hYR8o4Nyu4l5vo1+wTaitX6Ch4OF
+hIyNjIWKhpuHhYyRi5KXjoaKmZKUkpWblJudnJeZmI+SkayYmaeVkZ6inIqBpY2F
+qZOKq5KGp5yUs5+Zt5SVqaOduqieuI2sr56hp4+usaOlpKytrKeqp7qqq6mku7O0
+s7u8u7e6t7CwsaGonsW3uJ/Gt7zAucHEv5mLx6aazq2owrKsxLq1yrm3x62i0ras
+</pre>
+
+<p>Decode it to obtain a GIF with the flag.</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/efc/xortool_out# tr -d '\n' < 065.out | base64 -d > output
+root@kali:~/hackazon/efc/xortool_out# file output 
+output: GIF image data, version 89a, 360 x 191
+</pre>
+
+<img class="img-fluid" src="/static/img/hackazon-xmas-2018/efc/flag.gif">

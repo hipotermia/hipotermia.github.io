@@ -1,0 +1,75 @@
+<h3>[200] Tenjin Cryptography</h3>
+
+<p class="challenge-description">My crew just hacked Tenjin Corp. We got access to their database with encrypted
+    credentials. We think they use homebrew crypto to store their passwords. Can you help us reverse their admin
+    password so we can deface their intranet with cat pictures?
+    The encrypted admin password is uq`HzD*ev/TBnf^<br><br>
+    You can access their password encryption tool on 10.6.0.2:8080.</p>
+
+<p>When connecting to the specified service on <code>10.6.0.2:8080</code> it's possible to test the encryption
+    mechanism.</p>
+
+<pre class="prettyprint">
+root@kali:~/hackazon/tenjin# nc 10.6.0.2 8080
+Please input a password:
+1aaaaaaaa
+Encrypting...
+The encrypted result: 8b^uoP[.n
+</pre>
+
+<p>After some tests the follwoing assumptions can be taken:</p>
+<ul>
+    <li>The encrypted result has the same length as the password.</li>
+    <li>When increasing the ASCII number from a character, the ASCII number for one of the characters in the encrypted
+        result is also increased, meaning the position of the characters is mixed.
+    </li>
+</ul>
+
+<p>To retrieve the encrypted password I made the following script which connects to the service ant tests the specified
+    character till find the correct one.</p>
+
+<pre class="prettyprint">
+import socket,time
+
+def get_enc(pwd):
+    print pwd
+    s = socket.socket()
+    s.connect(('10.6.0.2', 8080))
+    s.recv(256)
+    s.send(pwd + '\n')
+    s.recv(256)
+    return s.recv(256).replace('The encrypted result: ','')
+
+def get_position(ret):
+    enc_pwd = '8buQGK$ev/TB[.n'  
+    for i,x in enumerate(enc_pwd):
+            if enc_pwd[i] != ret[i]:
+                return i
+
+
+if __name__ == "__main__":
+    n = input('Position to test:')
+    pwd = list('CTF{aaaaaaaaa1}')
+    pwd[n] = 'b'
+    pwd = "".join(pwd)
+    ret = get_enc(pwd)
+    i = get_position(ret)
+  
+    end = 'uq`HzD*ev/TBnf^'
+    need = end[i]
+    print 'We need the char:', need
+
+    while True:
+        c = raw_input('My char: ')
+        pwd = list(pwd)
+        pwd[n] = c
+        pwd = "".join(pwd)
+        enc = get_enc(pwd)
+        print 'Received:', enc[i], '//', enc
+</pre>
+
+<p>Finally, we find that the password used to generate the encrypted result <code>uq`HzD*ev/TBnf^</code> is:</p>
+
+<pre class="prettyprint">
+CTF{GG+wp%1337}
+</pre>

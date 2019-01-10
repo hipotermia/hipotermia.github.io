@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Hackazon XMAS 2018{% endblock %}
+{% block content %}
+    <div class="pretty-font">
+        <h1>Hackazon Xmas 2018</h1>
+
+        <p>This is the write-up for the CTF Hackazon organized during the winter holidays (December 21 - January 6
+            2019).<br>
+            Most of the challenges are pretty easy but also really interesting, I learnt a lot with these.<br>
+            I finished in the third position completing all the challenges, here are my solutions for all of them,
+            hope it helps.</p>
+
+        {% set templates = [
+            {"name": "X-MAS Adventure [NETWORK][EXPLOIT]", "path":"xmas_adventure"},
+            {"name": "EFC [CRYPTO]", "path":"efc"},
+            {"name": "Modbus [MISC]", "path":"modbus"},
+            {"name": "Santa or no Santa? [MISC]", "path":"santa_or_not"},
+            {"name": "Combination Lock [REVERSING]", "path":"combination"},
+            {"name": "Secretive Santa [MISC]", "path":"secretive_santa"},
+            {"name": "Santa's mining pool [CRYPTO]", "path":"santas_mining_pool"},
+            {"name": "Tenjin [CRYPTO]", "path":"tenjin"},
+            {"name": "XMAS Protocol [NETWORK]", "path":"xmas_protocol"}
+        ] %}
+
+        <div class="flexcontainer">
+            {% for template in templates %}
+                <a class="link-box" href="#{{ template.path }}">{{ template.name }}</a>
+            {% endfor %}
+        </div>
+
+        <hr>
+
+        {% for template in templates %}
+            <div id="{{ template.path }}">
+                <h2>{{ template.name }}</h2>
+                {% include "hackazon-xmas-2018/" + template.path + ".html" %}
+            </div>
+            {% if loop.index != templates|length %}
+                <hr>
+            {% endif %}
+        {% endfor %}
+    </div>
+{% endblock %}
