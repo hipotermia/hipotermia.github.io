@@ -8,7 +8,7 @@ title: SecNotes
 
 <img class="img-fluid" src="/static/img/htb/secnotes/secnotes.png">
 
-<p>This box is almost all about enumerating. To obtain a shell it's necessary to exploit a SQLi vulnerability and, once in, to elevate privileges we will need to play with a new function of Windows, Linux subsystems.</p> 
+<p>This box is almost all about enumerating. To obtain a shell it's necessary to exploit a SQLi vulnerability and, once in, to elevate privileges we will need to play with a new functionality of Windows, Linux subsystems.</p> 
 
 <h2>Enumeration</h2>
 
@@ -55,7 +55,7 @@ Host script results:
 Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
 Nmap done: 1 IP address (1 host up) scanned in 65.32 seconds</pre>
 
-<p>To not miss any port, also run another nmap trying all ports.</p>
+<p>To not miss any port, also run another nmap trying all of them.</p>
 
 <pre class="prettyprint">
 root@kali:~/htb/secnotes# nmap -p- -T4 10.10.10.97
@@ -71,7 +71,7 @@ PORT     STATE SERVICE
 
 Nmap done: 1 IP address (1 host up) scanned in 214.41 seconds</pre>
 
-<p>As shown above, there's something in the port 8808, run another nmap to check what's exactly in there.</p>
+<p>As shown above, there's something in port 8808, run another nmap to check what's exactly in there.</p>
 
 <pre class="prettyprint">
 root@kali:~/htb/secnotes# nmap -sC -sV -p8808 10.10.10.97
@@ -102,7 +102,9 @@ Nmap done: 1 IP address (1 host up) scanned in 14.66 seconds</pre>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/3.png">
 
-<p>After some investigation, we can deduce that there's a SQLi flaw on the login form.</p>
+<p>Once in, we get a page where we can add notes (that's why the machine is called SecNotes)</p> 
+
+<p>After some investigation, we can find a SQLi flaw on the login form.</p>
 
 <p>When specifying the following code as the username.</p>
 
