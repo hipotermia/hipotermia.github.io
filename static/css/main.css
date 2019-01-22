@@ -72,6 +72,11 @@ h3 {
     font-weight: bold;
 }
 
+.date {
+    color: #191919;
+    font-size: 80%;
+}
+
 .pretty-font {
     font-family: 'Nunito Sans';
 }
@@ -119,4 +124,22 @@ pre.prettyprint {
     background-color: #191919;
     color: #c3c3c3;
     padding: 0.5rem 0 0 0;
+}
+
+.index-box {
+    display: block;
+    border: 2px solid #191919;
+    text-align: center;
+    margin: 5px;
+    border-radius: 5px;
+    cursor: pointer;
+    padding: 10px;
+}
+
+.index-box:hover {
+    text-decoration: none;
+}
+
+.index-box .date:hover {
+    color: #191919;
 }
