@@ -114,6 +114,10 @@ pre.prettyprint {
     white-space: pre;
 }
 
+pre.prettyprint.long {
+    max-height: 500px;
+}
+
 .my-footer {
     position: absolute;
     right: 0;
@@ -124,6 +128,10 @@ pre.prettyprint {
     background-color: #191919;
     color: #c3c3c3;
     padding: 0.5rem 0 0 0;
+}
+
+.my-footer p{
+    margin-bottom: 0.5rem;
 }
 
 .index-box {
