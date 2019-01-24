@@ -9,11 +9,11 @@ title: SecNotes
 
 <img class="img-fluid" src="/static/img/htb/secnotes/secnotes.png">
 
-<p>This box is almost all about enumerating. To obtain a shell it's necessary to exploit a SQLi vulnerability and, once in, to elevate privileges we will need to play with a new functionality of Windows, Linux subsystems.</p> 
+<p>This box is almost all about enumerating. To obtain a shell, it's necessary to exploit an SQLi vulnerability and, once in, to elevate privileges we will need to play with a new functionality of Windows, Linux subsystems.</p> 
 
 <div class="flexcontainer">
     <a class="link-box" href="#enumeration">Enumeration</a>
-    <a class="link-box" href="#explotation">Explotation</a>
+    <a class="link-box" href="#exploitation">Exploitation</a>
     <a class="link-box" href="#privesc">Privilege Escalation</a>
     <a class="link-box" href="#bonus">Bonus</a>
 </div>
@@ -81,7 +81,7 @@ PORT     STATE SERVICE
 
 Nmap done: 1 IP address (1 host up) scanned in 214.41 seconds</pre>
 
-<p>As shown above, there's something in port 8808, run another nmap to check what's exactly in there.</p>
+<p>As shown above, there's something in port 8808, run another nmap to check what exactly is in there.</p>
 
 <pre class="prettyprint">
 root@kali:~/htb/secnotes# nmap -sC -sV -p8808 10.10.10.97
@@ -100,7 +100,7 @@ Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
 Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
 Nmap done: 1 IP address (1 host up) scanned in 14.66 seconds</pre>
 
-<p>It looks like there's only a default instalation of an IIS, which we will later use.</p>
+<p>It looks like there's only a default installation of an IIS, which we will later use.</p>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/1.png">
 
@@ -112,17 +112,17 @@ Nmap done: 1 IP address (1 host up) scanned in 14.66 seconds</pre>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/3.png">
 
-<p>Once in, we get a page where we can add notes (that's why the machine is called SecNotes)</p> 
+<p>Once in, we get a page where we can add notes (that's why the machine is called SecNotes).</p> 
 
-<p>After some investigation, we can find a SQLi flaw on the login form.</p>
+<p>After some investigation, we can find an SQLi flaw on the login form.</p>
 
-<p>When specifying the following code as the username.</p>
+<p>Specify the following code as the username to exploit it.</p>
 
 <pre class="prettyprint">' union select 1,2,3,4-- -</pre>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/4.png">
 
-<p>We can see that <code>2</code> and <code>4</code> are printed on the page, which means that there's an union based attack we can use to extract information from the database.</p>
+<p>We can see that <code>2</code> and <code>4</code> are printed on the page, which means that we can use a union based attack to extract information from the database.</p>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/5.png">
 
@@ -130,7 +130,7 @@ Nmap done: 1 IP address (1 host up) scanned in 14.66 seconds</pre>
 
 <pre class="prettyprint">' union select 1,username,3,password from users-- -</pre>
 
-<p>Instead use the following payloads to retrieve the information.</p>
+<p>Instead, use the following payloads to retrieve the information.</p>
 
 <pre class="prettyprint">' union select 1,id,3,username from users-- -</pre>
 
@@ -146,15 +146,15 @@ Nmap done: 1 IP address (1 host up) scanned in 14.66 seconds</pre>
 tyler:$2y$10$IMZPI.99fAPmsvGi0KWaJ.8pakoHDfobENhzx4Kwbb/7OpvFXaQt.
 </pre>
 
-<p>But instead of using there's credentials, we are going to use something that is also hidden in the database. We can use the following username to see all the notes published of every user.</p>
+<p>But instead of using those credentials, we are going to use something that is also hidden in the database. We can use the following username to see all the notes published of every user.</p>
 
 <pre class="prettyprint">' or '1'='1</pre>
 
-<p>On one of the notes there are the credentials to access, it seems, one of the SMB shares.</p>
+<p>In one of the notes there are the credentials to access, it seems, one of the SMB shares.</p>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/8.png">
 
-<h2 id="explotation">Explotation</h2>
+<h2 id="exploitation">Exploitation</h2>
 
 <p>Connect to the specified share and see that we have write permissions in there.</p>
 
@@ -215,7 +215,7 @@ type user.txt
 
 <h2 id="privesc">Privilege escalation</h2>
 
-<p>Looking through the machine directories, we can found something under Distros folder, which looks like an Ubuntu subsystem.</p>
+<p>Looking through the machine directories, we can find something under <code>Distros</code> folder, which looks like an Ubuntu subsystem.</p>
 
 <pre class="prettyprint">
 C:\Distros>dir
@@ -264,7 +264,7 @@ python -c 'import pty;pty.spawn("/bin/bash")'
 root@SECNOTES:~#
 </pre>
 
-<p>On the root's history, we can can found how the user tried to connect to the SMB share, leaving the administrator's credentials there.</p>
+<p>In the root's history, we can can find how the user tried to connect to the SMB share, leaving the administrator's credentials there.</p>
 
 <pre class="prettyprint">
 root@SECNOTES:~# history
@@ -333,7 +333,7 @@ nt authority\system
 
 <p>After reading some write-ups of this machine I found the intended way to get user wasn't the SQL injection, instead you had to use a Cross-Site Request Forgery (CSRF) attack.</p>
 
-<p>On the first website there's an option to update your password.</p>
+<p>On the first website, there's an option to update your password.</p>
 
 <img class="img-fluid" src="/static/img/htb/secnotes/9.png">
 
