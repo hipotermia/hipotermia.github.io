@@ -130,8 +130,12 @@ pre.prettyprint.long {
     padding: 0.5rem 0 0 0;
 }
 
-.my-footer p{
+.my-footer p {
     margin-bottom: 0.5rem;
+}
+
+.my-footer a:hover {
+    text-decoration: none;
 }
 
 .index-box {
