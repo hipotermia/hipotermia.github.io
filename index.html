@@ -1,27 +1,26 @@
 ---
 layout: default
 title: Index
+last-posts:
+- name: Ypuffy [HTB]
+  date: 09/02/2019
+  link: /htb/ypuffy
+- name: SecNotes [HTB]
+  date: 20/01/2019
+  link: /htb/secnotes
+- name: Hackazon Xmas 2018 CTF
+  date: 08/01/2019
+  link: /ctf/hackazon-xmas-2018
 ---
 
 <h2>My stuff</h2>
 
 <div class="row" style="display: flex;align-items: center;">
-	<div class="col-sm">
-		<a href="/htb/ypuffy" class="index-box">
-			<span>Ypuffy [HTB]</span><br>
-			<span class="date">09/02/2019</span></a>
-	</div>
-
-	<div class="col-sm">
-		<a href="/htb/secnotes" class="index-box">
-			<span>SecNotes [HTB]</span><br>
-			<span class="date">20/01/2019</span></a>
-	</div>
-
-	<div class="col-sm">
-		<a href="/ctf/hackazon-xmas-2018" class="index-box">
-			<span>Hackazon Xmas 2018 CTF</span><br>
-			<span class="date">08/01/2019</span>
-		</a>
-	</div>
+    {% for post in page.last-posts %}
+    <div class="col-sm">
+        <a href="{{post.link}}" class="index-box">
+            <span>{{post.name}}</span><br>
+            <span class="date">{{post.date}}</span></a>
+    </div>
+    {% endfor %}
 </div>
