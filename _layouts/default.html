@@ -34,7 +34,9 @@
                     CTFs
                 </a>
                 <div aria-labelledby="navbarDropdown" class="dropdown-menu">
-                    <a class="dropdown-item" href="/ctf/hackazon-xmas-2018">Hackazon Xmas 2018</a>
+                    {% for post in site.data.posts %}
+                        {% if post.type == "ctf" %}<a class="dropdown-item" href="{{post.link}}">{{post.name}}</a>{% endif%}
+                    {% endfor %}
                 </div>
             </li>
             <li class="nav-item dropdown">
@@ -43,9 +45,9 @@
                     HTB
                 </a>
                 <div class="dropdown-menu">
-                    <a class="dropdown-item" href="/htb/giddy">Giddy</a>
-                    <a class="dropdown-item" href="/htb/ypuffy">Ypuffy</a>
-                    <a class="dropdown-item" href="/htb/secnotes">SecNotes</a>
+                    {% for post in site.data.posts %}
+                        {% if post.type == "htb" %}<a class="dropdown-item" href="{{post.link}}">{{post.name}}</a>{% endif%}
+                    {% endfor %}
                 </div>
             </li>
         </ul>

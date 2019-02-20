@@ -1,28 +1,15 @@
 ---
 layout: default
 title: Index
-last-posts:
-- name: Giddy [HTB]
-  date: 16/02/2019
-  link: /htb/giddy
-- name: Ypuffy [HTB]
-  date: 09/02/2019
-  link: /htb/ypuffy
-- name: SecNotes [HTB]
-  date: 20/01/2019
-  link: /htb/secnotes
-- name: Hackazon Xmas 2018 CTF
-  date: 08/01/2019
-  link: /ctf/hackazon-xmas-2018
 ---
 
 <h2>My stuff</h2>
 
 <div class="row" style="display: flex;align-items: center;">
-    {% for post in page.last-posts %}
+    {% for post in site.data.posts %}
     <div class="col-sm">
         <a href="{{post.link}}" class="index-box">
-            <span>{{post.name}}</span><br>
+            <span>{{post.name}} [{{post.type | upcase}}]</span><br>
             <span class="date">{{post.date}}</span></a>
     </div>
     {% endfor %}
