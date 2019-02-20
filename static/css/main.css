@@ -7,9 +7,10 @@ body {
     position: relative;
     min-height: 100%;
     padding-top: 5rem;
-    font-size: 17px;
+    font-size: 16px;
     color: #404040;
     padding-bottom: 5rem;
+    font-family: 'Noto Sans';
 }
 
 .container {
@@ -24,11 +25,12 @@ body {
 .img-fluid {
     display: block;
     margin: 10px auto;
+    border-radius: 3px;
 }
 
 .navbar {
-    font-family: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    padding: .25rem 1rem;
+    font-size: 15px;
+    padding: .2rem 1rem;
 }
 
 .navbar-dark .navbar-nav .nav-link {
@@ -57,32 +59,28 @@ body {
 }
 
 h1, h2, h3 {
-    font-family: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
     color: #000;
+    font-variant: all-small-caps;
 }
 
 h1 {
-    font-size: 30px;
+    font-size: 32px;
     font-weight: bold;
 }
 
 h2 {
-    font-size: 20px;
+    font-size: 22px;
     font-weight: bold;
 }
 
 h3 {
-    font-size: 17px;
+    font-size: 19px;
     font-weight: bold;
 }
 
 .date {
     color: #191919;
     font-size: 80%;
-}
-
-.pretty-font {
-    font-family: 'Nunito Sans';
 }
 
 .challenge-description {
@@ -158,4 +156,8 @@ pre.prettyprint.long {
 
 .index-box .date:hover {
     color: #191919;
+}
+
+.dropdown-item {
+    padding: 0 0.8rem;
 }
