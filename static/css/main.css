@@ -141,6 +141,7 @@ pre.prettyprint.long {
 }
 
 .index-box {
+    background-color: #f8f9fa;
     display: block;
     border: 2px solid #191919;
     text-align: center;

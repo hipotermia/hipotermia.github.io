@@ -5,9 +5,9 @@ title: Index
 
 <h2>My stuff</h2>
 
-<div class="row" style="display: flex;align-items: center;">
+<div class="row" style="align-items: center;">
     {% for post in site.data.posts %}
-    <div class="col-sm">
+    <div class="col-md-4">
         <a href="{{post.link}}" class="index-box">
             <span>{{post.name}} [{{post.type | upcase}}]</span><br>
             <span class="date">{{post.date}}</span></a>
