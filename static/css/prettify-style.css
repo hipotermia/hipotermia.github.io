@@ -1,11 +1,8 @@
-/* Pretty printing styles. Used with prettify.js. */
-/* Vim sunburst theme by David Leibovic */
-
 pre .str, code .str { color: #67C0DD; } /* string */
-pre .kwd, code .kwd { color: #BC4AC8; } /* keyword */
-pre .com, code .com { color: #54C24C; } /* comment */
-pre .typ, code .typ { color: #589bc5; } /* type */
-pre .lit, code .lit { color: #D2653A; } /* literal */
+pre .kwd, code .kwd { color: #ea23ff; } /* keyword */
+pre .com, code .com { color: #41f134; } /* comment */
+pre .typ, code .typ { color: #009dff; } /* type */
+pre .lit, code .lit { color: #eacf3f; } /* literal */
 pre .pun, code .pun { color: #fff; } /* punctuation */
 pre .pln, code .pln { color: #fff; } /* plaintext */
 pre .tag, code .tag { color: #89bdff; } /* html/xml tag  */
@@ -19,28 +16,10 @@ pre.prettyprint, code.prettyprint {
 }
 
 pre.prettyprint {
-	width: 95%;
-	margin: 1em auto;
-	padding: 1em;
-	white-space: pre-wrap;
+    font-size: 75%;
+    padding: 1em;
 }
 
-
-/* Specify class=linenums on a pre to get line numbering */
-ol.linenums { margin-top: 0; margin-bottom: 0; color: #AEAEAE; } /* IE indents via margin-left */
-li.L0,li.L1,li.L2,li.L3,li.L5,li.L6,li.L7,li.L8 { list-style-type: none }
-/* Alternate shading for lines */
-li.L1,li.L3,li.L5,li.L7,li.L9 { }
-
-@media print {
-  pre .str, code .str { color: #060; }
-  pre .kwd, code .kwd { color: #006; font-weight: bold; }
-  pre .com, code .com { color: #600; font-style: bold; }
-  pre .typ, code .typ { color: #404; font-weight: bold; }
-  pre .lit, code .lit { color: #044; }
-  pre .pun, code .pun { color: #440; }
-  pre .pln, code .pln { color: #000; }
-  pre .tag, code .tag { color: #006; font-weight: bold; }
-  pre .atn, code .atn { color: #404; }
-  pre .atv, code .atv { color: #060; }
+pre.prettyprint.long {
+    max-height: 500px;
 }

@@ -110,14 +110,6 @@ h3 {
     color: #fff;
 }
 
-pre.prettyprint {
-    white-space: pre;
-}
-
-pre.prettyprint.long {
-    max-height: 500px;
-}
-
 .my-footer {
     position: absolute;
     right: 0;
