@@ -46,11 +46,5 @@
     "type": "htb",
     "date": "20/01/2019",
     "link": "/htb/secnotes"
-  },
-  {
-    "name": "Hackazon Xmas 2018",
-    "type": "ctf",
-    "date": "08/01/2019",
-    "link": "/ctf/hackazon-xmas-2018"
   }
 ]
