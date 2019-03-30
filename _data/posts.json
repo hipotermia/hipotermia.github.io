@@ -1,5 +1,11 @@
 [
   {
+    "name": "Curling",
+    "type": "htb",
+    "date": "30/03/2019",
+    "link": "/htb/curling"
+  },
+  {
     "name": "Frolic",
     "type": "htb",
     "date": "23/03/2019",
