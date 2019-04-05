@@ -1,5 +1,11 @@
 [
   {
+    "name": "Vault",
+    "type": "htb",
+    "date": "06/04/2019",
+    "link": "/htb/vault"
+  },
+  {
     "name": "Curling",
     "type": "htb",
     "date": "30/03/2019",

