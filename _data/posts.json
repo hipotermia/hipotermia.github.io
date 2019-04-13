@@ -1,5 +1,11 @@
 [
   {
+    "name": "RedCross",
+    "type": "htb",
+    "date": "13/04/2019",
+    "link": "/htb/redcross"
+  },
+  {
     "name": "Vault",
     "type": "htb",
     "date": "06/04/2019",
