@@ -1,4 +1,9 @@
-[
+[{
+    "name": "Lightweight",
+    "type": "htb",
+    "date": "11/05/2019",
+    "link": "/htb/lightweight"
+  },
   {
     "name": "Irked",
     "type": "htb",

