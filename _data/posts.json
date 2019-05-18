@@ -1,4 +1,11 @@
-[{
+[
+  {
+    "name": "Conceal",
+    "type": "htb",
+    "date": "18/05/2019",
+    "link": "/htb/conceal"
+  },
+  {
     "name": "Lightweight",
     "type": "htb",
     "date": "11/05/2019",
