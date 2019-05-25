@@ -1,5 +1,11 @@
 [
   {
+    "name": "Chaos",
+    "type": "htb",
+    "date": "25/05/2019",
+    "link": "/htb/chaos"
+  },
+  {
     "name": "Conceal",
     "type": "htb",
     "date": "18/05/2019",

