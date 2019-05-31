@@ -1,5 +1,11 @@
 [
   {
+    "name": "Sizzle",
+    "type": "htb",
+    "date": "01/06/2019",
+    "link": "/htb/sizzle"
+  },
+  {
     "name": "Chaos",
     "type": "htb",
     "date": "25/05/2019",
