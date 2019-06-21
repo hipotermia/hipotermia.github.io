@@ -1,5 +1,11 @@
 [
   {
+    "name": "Querier",
+    "type": "htb",
+    "date": "22/06/2019",
+    "link": "/htb/querier"
+  },
+  {
     "name": "Flujab",
     "type": "htb",
     "date": "15/06/2019",
