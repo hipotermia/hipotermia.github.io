@@ -1,5 +1,11 @@
 [
   {
+    "name": "Netmon",
+    "type": "htb",
+    "date": "29/06/2019",
+    "link": "/htb/netmon"
+  },
+  {
     "name": "Querier",
     "type": "htb",
     "date": "22/06/2019",

