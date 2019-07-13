@@ -1,5 +1,11 @@
 [
   {
+    "name": "FriendZone",
+    "type": "htb",
+    "date": "13/07/2019",
+    "link": "/htb/friendzone"
+  },
+  {
     "name": "Netmon",
     "type": "htb",
     "date": "29/06/2019",
