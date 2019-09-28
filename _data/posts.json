@@ -1,5 +1,11 @@
 [
   {
+    "name": "SwagShop",
+    "type": "htb",
+    "date": "28/09/2019",
+    "link": "/htb/swagshop"
+  },
+  {
     "name": "OneTwoSeven",
     "type": "htb",
     "date": "31/08/2019",
