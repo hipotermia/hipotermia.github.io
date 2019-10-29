@@ -1,5 +1,11 @@
 [
   {
+    "name": "XSS - Incapsula bypass",
+    "type": "bb",
+    "date": "29/10/2019",
+    "link": "/bb/xss-incapsula"
+  },
+  {
     "name": "SwagShop",
     "type": "htb",
     "date": "28/09/2019",
