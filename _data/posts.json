@@ -1,5 +1,11 @@
 [
   {
+    "name": "XSS - 10K Followers Intigriti",
+    "type": "bb",
+    "date": "25/11/2019",
+    "link": "/bb/xss-10k-intigriti"
+  },
+  {
     "name": "XSS - Incapsula bypass",
     "type": "bb",
     "date": "29/10/2019",

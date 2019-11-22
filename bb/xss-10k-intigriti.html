@@ -1,0 +1,60 @@
+---
+layout: default
+title: XSS Challenge - 10K Followers Intigriti
+---
+
+<h1>XSS Challenge - 10K Followers Intigriti</h1>
+<p class="date">25/11/2019</p>
+
+<p>Here's a brief explanation of my solution for the <b>10K Followers Intigriti's XSS Challenge</b>.</p>
+
+<hr>
+
+<p>The challenge consisted in finding a <code>XSS</code> vulnerability on the following code which was hosted on <code>https://challenge.intigriti.io/</code>.</p>
+
+<pre class="prettyprint linenums">
+&lt;script>
+  const whitelist = ['intigriti.com','intigriti.io'];
+  var url = new URL(location.hash.substr(1));
+  if(whitelist.indexOf(url.hostname) > -1){
+    document.write("Redirecting you to " + encodeURIComponent(url.href) + "...");
+    window.setTimeout(function(){
+      location = location.hash.substr(1);
+    });
+  }
+  else{
+    document.write(url.hostname + " is not a valid domain.")
+  }
+&lt;/script>
+</pre>
+
+<p>What this code should do is just grabbing the hash element of the <code>URL</code>, check if it's a whitelisted domain, then write it on the document and redirect the user there. If it's not whitelisted, then this is written on the document and nothing else happens.</p>
+
+<p>After <u><b>not</b></u> reading the code correctly, I thought the <code>if</code> statement was just checking if the hostname contained <code>intigriti.com</code> or <code>intigriti.io</code>. So my first reaction was to get a domain name that matched.</p>
+
+<img class="img-fluid" src="/static/img/bb/xss-10k-intigriti/domain.png">
+
+<p>But I reread the code and saw the hostname had to be one of those exactly, so no domains were needed, only <code>intigriti.com</code> or <code>intigriti.io</code> could be used.</p>
+
+<p>Someone could think that the vulnerable part is when <code>document.write</code> is used because we could directly write something like <code>&lt;script>alert()&lt;/script></code> on the document, but here there should be no problem in using it, since on line <code>5</code> the function <code>encodeURIComponent</code> is used encoding all special characters, and on line <code>11</code> only a hostname could be written, and a hostname can't contain characters like <code>&lt;</code>.</p>
+
+<p>The only insertion point that we have left is on line <code>7</code> where the redirection is performed. Something that everyone may not know is that is possible to use a redirection like this to execute javascript code using a value like <code>location = 'javascript:alert()';</code>.</p>
+
+<p>Finally, the trick on the code is the double usage of <code>location.hash.substr(1)</code> on line <code>3</code> (before the <code>if</code>) and on line <code>7</code> (after the <code>if</code>). Between these two instructions is possible to change the hash to bypass the <code>if</code> statement and this can be done with an <code>iframe</code> in a script like the following (you have to play with the <code>setTimeout</code> value to perform the hash change on the exact moment).</p>
+
+<pre class="prettyprint">
+&lt;html>
+&lt;body>
+&lt;script>
+  var iframe = document.createElement('iframe');
+  iframe.src = 'https://challenge.intigriti.io/#http://intigriti.com/';
+  document.body.appendChild(iframe);
+  setTimeout(function(){
+    iframe.src = 'https://challenge.intigriti.io/#javascript:alert(location.host)';
+  }, 200);
+&lt;/script>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<img class="img-fluid" src="/static/img/bb/xss-10k-intigriti/xss.png">
