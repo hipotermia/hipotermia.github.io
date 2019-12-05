@@ -152,3 +152,7 @@ h3 {
 .dropdown-item {
     padding: 0 0.8rem;
 }
+
+.prettyprint b span{
+    text-decoration: underline;
+}
