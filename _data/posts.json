@@ -1,5 +1,11 @@
 [
   {
+    "name": "Account takeover via HTTP Request Smuggling",
+    "type": "bb",
+    "date": "03/01/2020",
+    "link": "/bb/http-desync-account-takeover"
+  },
+  {
     "name": "HTTP Request Smuggling + IDOR",
     "type": "bb",
     "date": "05/12/2019",

