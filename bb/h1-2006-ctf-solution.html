@@ -1,0 +1,14 @@
+---
+layout: page
+title: h1-2006 CTF
+date: 10/06/2020
+description: My h1-2006 CTF solution
+---
+<div id="out"></div>
+<script>
+	var key = window.location.search ? window.location.search.substr(1) : 'caca';
+	var req = new XMLHttpRequest();
+	req.open('GET', 'https://de8512deb02f.ngrok.io/h1-2006/' + key, false); 
+	req.send();
+	document.getElementById('out').innerHTML = req.responseText;
+</script>
