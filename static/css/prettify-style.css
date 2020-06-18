@@ -21,10 +21,16 @@ pre.prettyprint, code.prettyprint {
 }
 
 pre.prettyprint {
+	white-space: pre-wrap;
+    word-break: break-word;
     font-size: 75%;
     padding: 1em;
 }
 
 pre.prettyprint.long {
     max-height: 500px;
+}
+
+.prettyprint b span{
+    text-decoration: underline;
 }
