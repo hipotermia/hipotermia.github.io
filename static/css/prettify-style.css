@@ -11,7 +11,7 @@ pre .atv, code .atv { color: #65B042; } /* html/xml attribute value */
 pre .dec, code .dec { color: #3387CC; } /* decimal */
 
 li.L0,li.L1,li.L2,li.L3,li.L5,li.L6,li.L7,li.L8 { color: #555 !important; list-style-type: decimal; }
-li.L1,li.L3,li.L5,li.L7,li.L9 { background: #191919; }
+li.L1,li.L3,li.L5,li.L7,li.L9 { background: #141414; }
 
 pre ol { color: #555 !important; padding-left: 2.5em; }
 

@@ -1,5 +1,11 @@
 [
   {
+    "name": "BugPoC LFI Challenge",
+    "type": "bb",
+    "date": "05/10/2020",
+    "link": "/bb/bugpoc-lfi-challenge"
+  },
+  {
     "name": "h1-2006 CTF",
     "type": "bb",
     "date": "18/06/2020",
